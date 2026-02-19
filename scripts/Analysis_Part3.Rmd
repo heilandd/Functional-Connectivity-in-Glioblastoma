@@ -1,0 +1,578 @@
+<!--
+NOTE (repository version):
+- Personal identifiers and machine-specific absolute paths have been removed.
+- Please set `PROJECT_ROOT` / input paths to point to your local data folder (e.g., `data/`).
+-->
+
+---
+title: "Untitled"
+author: "<REDACTED>"
+date: "2025-03-04"
+output: html_document
+---
+
+# Import packages and Data
+```{r}
+reticulate::use_condaenv("EcoFoundation")
+## Load Library
+library(DeepSPATA)
+library(SPATA2)
+library(Seurat)
+library(reticulate)
+library(tidyverse)
+library(igraph)
+library(kableExtra)
+library(igraph)
+library(readxl)
+
+## Import data
+source("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/import.R")
+
+TCGA <-  importTCGA()
+Spatial = importSpatial()
+scRNA = importGBMap()
+
+## Import colors
+pycolors <- importPyColors()
+
+```
+
+# Spatial distribution of neuronal subtypes in infiltration tumor samples:
+# Using Visium
+
+Samples with infiltration:
+ 404_R, 269_T, 667_T, 817_T, 260_R, 266_T, 334_T, 195096, N20_1763, N20_2382,
+N20_265, N20_1260_IB, N21_2485_B
+
+```{r}
+## Load data
+meta_data = Spatial$meta_data
+meta_data_filesystem = Spatial$meta_data_filesystem
+root_SPATA = Spatial$root_SPATA
+
+
+Sample = "195096"
+spata_obj <-  readRDS(paste0(root_SPATA,"/", meta_data_filesystem %>% 
+                            filter(Sample_ID ==Sample) %>% 
+                            pull(SPATA_objects))) %>% SPATA2::updateSpataObject()
+## Get Cell type deconvolution
+celltype = spata_obj@spatial[[1]]$cytospace
+
+## plotSurface
+table(celltype$CellType)
+
+## Optimize coloring towards neuronal functions
+colors <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBM_Neuron_colors.RDS")
+colors$annotation_level_4new <- 
+  colors$annotation_level_4 %>% 
+  str_replace_all(" ", "_") %>% 
+  str_replace_all("-", "_") %>% 
+  str_replace_all("/", "_")
+
+neuronal_subtypes = 
+  colors %>% 
+  filter(annotation_level_2=="Neurons") %>% 
+  mutate(subtype = c(rep("glutamatergic", 7), rep("GABAergic", 5)))
+
+
+getSubColors <- 
+  function (tab, class = "annotation_level_2", subclass = "annotation_level_4", 
+            external_pal = NULL, muted = NULL, pal = "Set3", max_pal = 12, 
+            random = T, seed = 200, into = "#EDEDED", add_n = 1) {
+    out <- tab %>% as.data.frame() %>% dplyr::group_by(!!sym(class), 
+        !!sym(subclass)) %>% dplyr::summarise(n = length(!!sym(class)))
+    class_unique <- unique(tab %>% pull(!!sym(class))) %>% as.character()
+    if (!is.null(external_pal)) {
+        color_L1 <- external_pal
+        if (length(color_L1) != length(class_unique)) 
+            stop("Number of colors in the external pal does not match with the number of classes")
+    }
+    else {
+        if (length(class_unique) > max_pal) {
+            color <- RColorBrewer::brewer.pal(max_pal, pal)
+            color_L1 <- colorRampPalette(color)(length(class_unique))
+        }
+        else {
+            color_L1 <- RColorBrewer::brewer.pal(length(class_unique), 
+                pal)
+        }
+    }
+    if (random == T) {
+        set.seed(seed)
+        color_L1 <- sample(color_L1)
+    }
+    out2 <- map_dfr(.x = 1:length(class_unique), .f = function(i) {
+        x <- out %>% dplyr::filter(!!sym(class) == class_unique[i])
+        a <- nrow(x)
+        if (!is.null(muted)) {
+            into <- color_L1[i] %>% scales::muted(muted[1], muted[2])
+        }
+        x <- x %>% dplyr::mutate(colors = c(colorRampPalette(color = c(into, 
+            color_L1[i]))(a + add_n)[c(1 + add_n):c(a + add_n)]))
+    })
+    all <- out %>% dplyr::pull(!!sym(subclass)) %>% unique()
+    withcolor <- out2 %>% dplyr::pull(!!sym(subclass)) %>% unique()
+    inter <- intersect(withcolor, all)
+    if (length(all[!all %in% inter]) > 0) {
+        out3 <- data.frame(a = "NaN", b = all[!all %in% inter], 
+            n = 1, colors = into)
+        names(out3) <- names(out2)
+        out_4 <- rbind(out2, out3) %>% dplyr::ungroup()
+    }
+    else {
+        out_4 <- out2
+    }
+    return(out_4)
+}
+
+
+## Get colors
+neuronal_subtypes <- 
+  getSubColors(neuronal_subtypes, 
+             class = "subtype", 
+             subclass="annotation_level_4new",
+             external_pal = pycolors[[2]][c(1,4)])
+
+colors$colors = "lightgrey"
+colors[colors$annotation_level_4new %in% neuronal_subtypes$annotation_level_4new, ]$colors = neuronal_subtypes$colors
+
+celltype$CellType <- factor(celltype$CellType, levels = colors$annotation_level_4new)
+cc <- colors$colors;names(cc) <- colors$annotation_level_4new
+
+library(ggforce)
+ggplot(celltype, aes(x_sc, y_sc, group = -1L)) +
+    geom_voronoi_tile(aes(fill = CellType), max.radius = 10, colour = 'black', linewidth=0.1)+
+    scale_fill_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  SPATA2::ggpLayerAxesSI(spata_obj)+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+
+colors$colors = "lightgrey"
+colors_org = readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBM_Neuron_colors.RDS")
+colors[colors$annotation_level_2 %in% c("Differentiated-like", "Stem-like"), ]$colors = colors_org[colors$annotation_level_2 %in% c("Differentiated-like", "Stem-like"), ]$colors
+colors[colors$annotation_level_4new %in% neuronal_subtypes$annotation_level_4new, ]$colors = neuronal_subtypes$colors
+
+celltype$CellType <- factor(celltype$CellType, levels = colors$annotation_level_4new)
+cc <- colors$colors;names(cc) <- colors$annotation_level_4new
+
+library(ggforce)
+ggplot(celltype, aes(x_sc, y_sc, group = -1L)) +
+    geom_voronoi_tile(aes(fill = CellType), max.radius = 10, colour = 'black', linewidth=0.1)+
+    scale_fill_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  SPATA2::ggpLayerAxesSI(spata_obj)+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+
+```
+
+## Trajectory analysis
+
+```{r}
+spata_obj <- createSpatialTrajectories(spata_obj)
+
+
+
+p = plotTrajectoryLineplot(spata_obj, 
+                       id="invasion", 
+                       variables = "GFAP",
+                       display_model=T)
+
+p
+p$data %>% 
+  ggplot()+
+  geom_line(mapping=aes(x=breaks, y=values, color=variables))+
+  scale_color_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))
+  
+
+
+
+```
+
+# Graph NN 
+## NN Analyisis
+```{r}
+
+samp_test <- c("404_R", "269_T", "667_T", "817_T", "260_R", "266_T", "334_T", "195096")
+glutamatergic <- neuronal_subtypes %>% filter(subtype=="glutamatergic") %>% pull(annotation_level_4new)
+GABA <- neuronal_subtypes %>% filter(subtype=="GABAergic") %>% pull(annotation_level_4new)
+
+returnNN <- function(i){
+    
+spata_obj <-  readRDS(paste0(root_SPATA,"/", meta_data_filesystem %>% 
+                            filter(Sample_ID ==samp_test[i]) %>% 
+                            pull(SPATA_objects))) %>% SPATA2::updateSpataObject()
+## Get Cell type deconvolution
+celltype = spata_obj@spatial[[1]]$cytospace
+
+
+library(deldir)
+df <- celltype %>% na.omit()
+triangulation <- deldir(df$x_sc, df$y_sc)
+
+net_df <- data.frame(from=df$UniqueCID[triangulation$delsgs$ind1],
+                    to=df$UniqueCID[triangulation$delsgs$ind2])
+
+### Remove connection with long distance
+net_df$x1 <- df$x_sc[match(net_df$from, df$UniqueCID)]
+net_df$y1 <- df$y_sc[match(net_df$from, df$UniqueCID)]
+net_df$x2 <- df$x_sc[match(net_df$to, df$UniqueCID)]
+net_df$y2 <- df$y_sc[match(net_df$to, df$UniqueCID)]
+net_df$dist <- sqrt((net_df$x2-net_df$x1)^2 + (net_df$y2-net_df$y1)^2)
+dist_threshold= c(net_df$dist %>% mean())+20
+net_df <- net_df %>% filter(!dist>dist_threshold)
+net <- igraph::graph_from_data_frame(net_df[,c("from", "to")])
+V(net)$x <- df$x[match(V(net)$name, df$cells)]
+V(net)$y <- df$y[match(V(net)$name, df$cells)]
+E(net)$dist <- net_df$dist
+cells <- df %>% filter(CellType %in% glutamatergic)
+
+listofB_NN <- map_dfr(1:length(cells$UniqueCID), .f=function(ii){
+  first_order_subgraph <- induced_subgraph(net, unlist(ego(net, order = 1, nodes = cells$UniqueCID[ii])))
+  df <- first_order_subgraph %>% igraph::get.data.frame() %>%  mutate(NN=ii)
+  NN_cells <- data.frame(cells = unique(c(df$from, df$to)), NN=ii)
+  
+})
+names(listofB_NN)[1] <- "UniqueCID"
+Neuron_NN <- 
+  left_join(listofB_NN, celltype %>% select(UniqueCID, CellType), by="UniqueCID") %>% 
+  mutate(sample = samp_test[i])
+
+return(Neuron_NN)
+}
+safe_f <- safely(returnNN)
+Neuron_NN <- map(c(1:length(samp_test)), ~safe_f(.x), .progress=T)
+Neuron_NN_res <-map_dfr(Neuron_NN, ~.x$result)
+Neuron_NN_glutamatergic <- Neuron_NN_res
+
+
+returnNN <- function(i){
+    
+spata_obj <-  readRDS(paste0(root_SPATA,"/", meta_data_filesystem %>% 
+                            filter(Sample_ID ==samp_test[i]) %>% 
+                            pull(SPATA_objects))) %>% SPATA2::updateSpataObject()
+## Get Cell type deconvolution
+celltype = spata_obj@spatial[[1]]$cytospace
+
+
+library(deldir)
+df <- celltype %>% na.omit()
+triangulation <- deldir(df$x_sc, df$y_sc)
+
+net_df <- data.frame(from=df$UniqueCID[triangulation$delsgs$ind1],
+                    to=df$UniqueCID[triangulation$delsgs$ind2])
+
+### Remove connection with long distance
+net_df$x1 <- df$x_sc[match(net_df$from, df$UniqueCID)]
+net_df$y1 <- df$y_sc[match(net_df$from, df$UniqueCID)]
+net_df$x2 <- df$x_sc[match(net_df$to, df$UniqueCID)]
+net_df$y2 <- df$y_sc[match(net_df$to, df$UniqueCID)]
+net_df$dist <- sqrt((net_df$x2-net_df$x1)^2 + (net_df$y2-net_df$y1)^2)
+dist_threshold= c(net_df$dist %>% mean())+20
+net_df <- net_df %>% filter(!dist>dist_threshold)
+net <- igraph::graph_from_data_frame(net_df[,c("from", "to")])
+V(net)$x <- df$x[match(V(net)$name, df$cells)]
+V(net)$y <- df$y[match(V(net)$name, df$cells)]
+E(net)$dist <- net_df$dist
+cells <- df %>% filter(CellType %in% GABA)
+
+listofB_NN <- map_dfr(1:length(cells$UniqueCID), .f=function(ii){
+  first_order_subgraph <- induced_subgraph(net, unlist(ego(net, order = 1, nodes = cells$UniqueCID[ii])))
+  df <- first_order_subgraph %>% igraph::get.data.frame() %>%  mutate(NN=ii)
+  NN_cells <- data.frame(cells = unique(c(df$from, df$to)), NN=ii)
+  
+})
+names(listofB_NN)[1] <- "UniqueCID"
+Neuron_NN <- 
+  left_join(listofB_NN, celltype %>% select(UniqueCID, CellType), by="UniqueCID") %>% 
+  mutate(sample = samp_test[i])
+
+return(Neuron_NN)
+}
+safe_f <- safely(returnNN)
+Neuron_NN <- map(c(1:length(samp_test)), ~safe_f(.x), .progress=T)
+Neuron_NN_res <-map_dfr(Neuron_NN, ~.x$result)
+Neuron_NN_GABA <- Neuron_NN_res
+
+
+
+
+input_glutamatergic<- 
+  Neuron_NN_glutamatergic %>% 
+  left_join(., data.frame(CellType=colors$annotation_level_4new,
+                           main=colors$annotation_level_4new)) %>% 
+  group_by(main) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(from="Neurons", to = main, weight=n) %>% 
+  as.data.frame()
+
+input_GABA<- 
+  Neuron_NN_GABA %>% 
+  left_join(., data.frame(CellType=colors$annotation_level_4new,
+                           main=colors$annotation_level_4new)) %>% 
+  group_by(main) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(from="Neurons", to = main, weight=n) %>% 
+  as.data.frame()
+
+
+
+input <- input_glutamatergic
+input$weight_GABA<-input_GABA$weight
+input$weight <- scales::rescale(input$weight, c(0,1))
+input$weight_GABA <- scales::rescale(input$weight_GABA, c(0,1))
+input$diff = input$weight-input$weight_GABA
+input <- input %>% arrange(desc(diff))
+input$to <- as.factor(input$to)
+
+col_n <- colors_org$colors
+names(col_n) <- colors$annotation_level_4new
+
+input %>% filter(!to%in% neuronal_subtypes$annotation_level_4new) %>% 
+ggplot()+
+  geom_col(mapping=aes(x=to, y=diff, fill=to))+
+  scale_fill_manual(values=col_n)+
+  scale_x_discrete(limits = input$to)+
+   theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black", angle=90, hjust=1),
+          axis.text.y = element_text(colour="black"))+
+  Seurat::NoLegend()
+
+
+
+#df <- df %>% filter(main=="Myeloid")
+
+df <- input[,c("from", "to", "weight")]
+#df <- df %>% filter(weight<500)
+#df$weight <- scales::rescale(df$weight, c(0,1))
+df$weight <- df$weight^5
+df$weight[8] <- df$weight[8]+0.0000009
+
+col_n <- colors_org$colors
+names(col_n) <- colors$annotation_level_4new
+names(col_n) <- colors$annotation_level_2
+
+graph <- igraph::graph_from_data_frame(df, directed=T)
+E(graph)$magnitude <- df$weight
+E(graph)$color <- df$to %>% as.character()
+type <- c(df$from, df$to) %>% unique()
+V(graph)$type <- type 
+
+V(graph)$type
+library(ggraph)
+library(ggrepel)
+ggraph(graph, layout = 'linear', circular = TRUE)+
+  geom_edge_arc2(aes(width=magnitude, alpha=magnitude, edge_color = color))+
+  geom_node_point(aes(color=type), size=8)+
+  coord_fixed()+
+  theme_classic()+
+  scale_color_manual(values=col_n)+
+  scale_edge_color_manual(values=col_n)+
+  geom_text_repel(aes(x=x, y=y,label=type %>% str_replace_all(., "[.]", " ")), size=3)
+
+
+```
+
+
+
+
+
+```{r}
+getGraph <- function(df){
+  triangulation <- deldir(df$x, df$y)
+  net_df <- data.frame(from=df$cells[triangulation$delsgs$ind1],
+                    to=df$cells[triangulation$delsgs$ind2])
+  ### Remove connection with long distance
+  net_df$x1 <- df$x[match(net_df$from, df$cells)]
+  net_df$y1 <- df$y[match(net_df$from, df$cells)]
+  net_df$x2 <- df$x[match(net_df$to, df$cells)]
+  net_df$y2 <- df$y[match(net_df$to, df$cells)]
+  net_df$dist <- sqrt((net_df$x2-net_df$x1)^2 + (net_df$y2-net_df$y1)^2)
+  dist_threshold= c(net_df$dist %>% mean())+20
+  net_df <- net_df %>% filter(!dist>dist_threshold)
+  net <- igraph::graph_from_data_frame(net_df[,c("from", "to")])
+  V(net)$x <- df$x[match(V(net)$name, df$cells)]
+  V(net)$y <- df$y[match(V(net)$name, df$cells)]
+  E(net)$dist <- net_df$dist
+  return(net)
+}
+graph <- getGraph(object_list$cell_types %>% na.omit())
+df <- object_list$cell_types
+getNN <- function(df,graph, hop, cell){
+  
+  first_order_subgraph <- induced_subgraph(graph, unlist(ego(graph, order = hop, nodes = cell)))
+  df_out <- first_order_subgraph %>% igraph::get.data.frame()
+  NN_cells <- data.frame(cells = unique(c(df_out$from, df_out$to))) %>% left_join(.,df, by="cells")
+  return(NN_cells)
+}
+
+```
+
+
+# Expression of NKCC1
+```{r}
+Sample = "195096"
+object <-  readRDS(paste0(root_SPATA,"/", meta_data_filesystem %>% 
+                            filter(Sample_ID ==Sample) %>% 
+                            pull(SPATA_objects))) %>% SPATA2::updateSpataObject()
+
+library(SingleCellExperiment)
+sc <- reticulate::import("scanpy")
+np <- reticulate::import("numpy")
+pd <- reticulate::import("pandas")
+bc <- getBarcodes(object)
+sce <- 
+    Seurat::CreateSeuratObject(counts=SPATA2::getCountMatrix(object)) %>% 
+    Seurat::as.SingleCellExperiment()
+exprs <- assay(sce, "counts")
+col_data <- as.data.frame(colData(sce))
+row_data <- as.data.frame(rowData(sce))
+  
+adata = sc$AnnData(X = t(exprs),obs = col_data, var = row_data)
+adata$obsm[["spatial"]] <- getCoordsDf(object)[,c("x", "y")] %>% as.matrix()
+
+```
+
+```{python}
+adata = r.adata
+import os
+import scvi
+import anndata as ad
+import pandas as pd
+import numpy as np
+import anndata as ad
+import matplotlib.pyplot as plt
+import scanpy as sc
+
+scvi.model.SCVI.setup_anndata(adata)
+model = scvi.model.SCVI(adata, n_latent=50)
+model.train(accelerator = 'cpu', max_epochs=100, early_stopping=True)
+adata.obsm['X_scVI'] = model.get_latent_representation() 
+adata.layers['scVI'] = model.get_normalized_expression(adata) 
+
+```
+
+```{r}
+adata = py$adata
+norm_exp <- adata$layers[["scVI"]] %>% t()
+bc <- getBarcodes(object)[[1]]
+genes <- getGenes(object)
+norm_exp <- norm_exp[genes, bc]
+object <- SPATA2::addExpressionMatrix(object, norm_exp, mtr_name = "scVI")
+
+image = plotSurface(object,pt_alpha=0)
+
+p=scRNA$ref %>% Seurat::FeaturePlot(., feature = "SLC12A2")
+
+
+celltype <- object@spatial[[1]]$cytospace
+p$data %>% rownames_to_column("OriginalCID")
+celltype_plot <- left_join(celltype, p$data %>% rownames_to_column("OriginalCID"))
+
+
+library(ggforce)
+
+color = colorRampPalette(c("#FFFFFF", RColorBrewer::brewer.pal(9, "Reds")))(50)
+
+celltype_plot[!celltype_plot$CellType %in% neuronal_subtypes$annotation_level_4new, ]$SLC12A2=0
+ggplot()+
+    geom_voronoi_tile(celltype_plot, mapping=aes(x_sc, y_sc, group = -1L, fill = SLC12A2, alpha = SLC12A2), 
+                      max.radius = 10, colour = 'darkgrey', linewidth=0.1)+
+    scale_fill_gradientn(colors=color, 
+                         limits=c(0,1), oob=scales::squish)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  SPATA2::ggpLayerAxesSI(object)+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+
+object <- createSpatialTrajectories(object)
+
+plotTrajectoryLineplot(object, 
+                       id="invasion2", 
+                       variables = "SLC12A1",
+                       display_model=T,
+                       smooth_span=0.6)
+  
+
+```
+
+## Expression of SLC12A2 in GABA vs glutamateric
+
+```{r}
+
+celltype_plot %>% 
+  filter(CellType %in% neuronal_subtypes$annotation_level_4new) %>% 
+  left_join(., data.frame(CellType = neuronal_subtypes$annotation_level_4new, subtype = neuronal_subtypes$subtype)) %>% 
+  group_by(subtype) %>% 
+  summarise(SLC12A2_mean = mean(SLC12A2), sd = sd(SLC12A2)/ sqrt(length(SLC12A2))) %>% 
+  ggplot()+
+  geom_col(mapping=aes(x=subtype, y=SLC12A2_mean, fill=subtype))+
+  geom_errorbar(mapping = aes(x=subtype, y=SLC12A2_mean, ymin = SLC12A2_mean - sd,  ymax = SLC12A2_mean + sd), width = 0.2, color = "black")+
+  theme_bw() +
+  scale_fill_manual(values = pycolors[[2]])+
+  theme(plot.margin = margin(1.5,1.5,1.5,1.5, "cm"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black"),
+        axis.text.y = element_text(colour="black"))
+  
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+

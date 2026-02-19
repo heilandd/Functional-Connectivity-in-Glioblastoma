@@ -1,0 +1,1788 @@
+<!--
+NOTE (repository version):
+- Personal identifiers and machine-specific absolute paths have been removed.
+- Please set `PROJECT_ROOT` / input paths to point to your local data folder (e.g., `data/`).
+-->
+
+---
+title: "Analysis MEA data"
+author: "<REDACTED>"
+date: "2025-02-20"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## Input packages:
+```{r}
+reticulate::use_condaenv("cell2loc_mps")
+library(readxl)
+library(patchwork)
+library(tidyverse)
+library(SPATA2)
+library(igraph)
+root_out = "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/Analysis_DHH"
+root_SPATA = "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/data/proc"
+root_MEA = "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/UKA_MEA/"
+meta <- readRDS("<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/Analysis_DHH/Meta.RDS")
+
+meta[,2] <- str_replace_all(meta[,2], "dieterhenrikheiland", "<REDACTED>")
+meta[,3] <- str_replace_all(meta[,3], "dieterhenrikheiland", "<REDACTED>")
+meta[,5] <- str_replace_all(meta[,5], "dieterhenrikheiland", "<REDACTED>")
+meta[,6] <- str_replace_all(meta[,6], "dieterhenrikheiland", "<REDACTED>")
+meta[,7] <- str_replace_all(meta[,7], "dieterhenrikheiland", "<REDACTED>")
+meta[,8] <- str_replace_all(meta[,8], "dieterhenrikheiland", "<REDACTED>")
+meta$spata2_new <- paste0(root_out, "/", meta$samples, "_spata2.RDS")
+
+
+
+colors <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBM_Neuron_colors.RDS")
+colors$annotation_level_4_new <- 
+  colors$annotation_level_4 %>% 
+  str_replace_all(., "-", "_") %>% 
+  str_replace_all(., " ", "_") %>% 
+  str_replace_all(., "/", "_")
+
+
+
+```
+
+
+## Colors
+```{python}
+import matplotlib.pyplot as plt
+cmap = plt.get_cmap('tab20')
+tab20_colors = cmap.colors
+
+# Converting RGB colors to hexadecimal format
+def rgb_to_hex(rgb):
+    return "#{:02x}{:02x}{:02x}".format(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
+
+tab20_hex_colors = [rgb_to_hex(color) for color in tab20_colors]
+tab20_hex_colors
+
+cmap = plt.get_cmap('tab10')
+tab10_colors = cmap.colors
+
+# Converting RGB colors to hexadecimal format
+def rgb_to_hex(rgb):
+    return "#{:02x}{:02x}{:02x}".format(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
+
+tab10_hex_colors = [rgb_to_hex(color) for color in tab20_colors]
+tab10_hex_colors
+```
+
+Samples die keinen Tumor haben !!
+
+S24_06_CT_01_spata2
+S24_06_CT_02_spata2
+
+
+## Create SPATA files
+```{r}
+i=1
+for(i in 1:nrow(meta)){
+  
+  raw <- readRDS(meta$raw_data[i])
+  scale=1
+  object <- SPATA2::initiateSpataObject_CountMtr(coords_df = raw$coords,
+                                                 count_mtr=raw$counts,
+                                                 image = raw$image$mea_overlay_orient,
+                                                 sample_name = meta$samples[i]
+                                                 )
+  object <- object %>% flipImage(axis="h")
+  plotSurface(object)
+  
+  saveRDS(object, paste0(root_out, "/", meta$samples[i], "_spata2.RDS"))
+  
+}
+meta$spata2_new <- paste0(root_out, "/", meta$samples, "_spata2.RDS")
+
+
+## Add cytospace:
+for(i in 1:nrow(meta)){
+  object <- readRDS(meta$spata2_new[i])
+  object@spatial[[1]]$cytospace = readRDS(meta$cytospace[i])
+  object@spatial[[1]]$graph = readRDS(meta$graph[i])
+  saveRDS(object, paste0(root_out, "/", meta$samples[i], "_spata2.RDS"))
+
+}
+
+## Add c2l:
+for(i in 1:nrow(meta)){
+  object <- readRDS(meta$spata2_new[i])
+  output <- paste0(root_out, "/", meta$samples[i] ,"_deconv.csv")
+  cell_types <- read.csv(output)
+  names(cell_types)[1] <- "barcodes"
+  cell_types_df <- cell_types
+  names(cell_types_df) <- str_remove(names(cell_types_df), "q05cell_abundance_w_sf_")
+  names(cell_types_df) <- names(cell_types_df) %>% str_replace_all(., "[.]", "_")
+  object <- object %>% SPATA2::addFeatures(cell_types_df, overwrite = T)
+
+  saveRDS(object, paste0(root_out, "/", meta$samples[i], "_spata2.RDS"))
+
+}
+
+```
+
+
+## Plot Single cell and mea data:
+```{r}
+#Colors:
+cc <- colors$colors;names(cc) <- colors$annotation_level_4_new
+i=5
+object <- readRDS(meta$spata2_new[i])
+plotSurface(object)
+
+object@used_genesets = rbind(data.frame(ont = "connectivity", gene=wnk_spak_genes), object@used_genesets)
+limits=c(0.1, 0.8)
+p = plotSurface(object, color_by = "wnk_spak_genes", alpha_by="wnk_spak_genes", display_image=F, limits=limits, oob=scales::squish)+
+  scale_alpha(limits=limits,oob=scales::squish)
+p
+
+cell_types <- object@spatial[[1]]$cytospace
+
+
+p = plotSurface(object, pt_alpha=0)
+
+library(ggforce)
+p=ggplot()+
+  geom_voronoi_tile(data =cell_types, mapping=aes(x=x_sc,y=y_sc, group = -1L, fill = CellType), 
+                      max.radius = 3, colour = 'black', linewidth=0.1, alpha=1)+
+    scale_fill_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+  Seurat::NoLegend()
+
+
+## Add MEA Grid
+library(ggnewscale)
+nodes <- object@spatial[[1]]$graph$nodes
+edges <- object@spatial[[1]]$graph$edges
+
+cond <- nodes$drug %>% unique()
+drug_select = c(nodes$drug %>% unique())[1]
+weight_lim = 0.4
+
+n_inp = nodes[!is.na(nodes$drug), ] %>% filter(.$drug == drug_select)
+e_inp = edges %>% filter(.$drug==drug_select) %>% filter(weight>weight_lim)
+
+
+p+
+  ggnewscale::new_scale_color()+
+  geom_point(data = n_inp, mapping=aes(x=x,y=y,alpha=degree), size=1)+
+  geom_segment(data = e_inp %>% arrange(weight), 
+               mapping=aes(x=x,y=y,xend=xend,yend=yend, color =weight, alpha=weight, size=weight), alpha=0.1)+ 
+  scale_size(range=c(0.1,0.3))+
+  scale_color_viridis_c(, 
+                        limits=c(0, 400), 
+                        oob=scales::squish)
+
+ggplot()+
+  geom_point(data = n_inp, mapping=aes(x=x,y=y,alpha=degree), size=2, color="black")+
+  geom_segment(data = e_inp, 
+               mapping=aes(x=x,y=y,xend=xend,yend=yend, color =weight, alpha=weight, size=weight))+ 
+  scale_size(range=c(0.1,1))+
+  scale_color_viridis_c(option="B", limits=c(0.3, 0.7), oob=scales::squish)
+
+```
+
+## KNN analysis
+```{r}
+
+## Get KNN cells of the MEA spots
+library(FNN)
+drug_select = c(nodes$drug %>% unique())[1]
+n_inp = 
+  nodes[!is.na(nodes$drug), ] %>% 
+  filter(.$drug == drug_select)
+
+#node_rank = n_inp %>% arrange(desc(degree)) %>% mutate(degree_rank=1:nrow(.)) %>% select(id, degree_rank)
+node_rank = n_inp %>% arrange(desc(nonrandom_spikes)) %>% mutate(degree_rank=1:nrow(.)) %>% select(id, degree_rank)
+
+
+query_points = data.frame(x=n_inp$x, y=n_inp$y)
+#data_points = data.frame(x=cell_types$x_sc, y=cell_types$y_sc)
+coords = SPATA2::getCoordsDf(object)
+data_points = data.frame(x=coords$x, y=coords$y)
+k <- 5
+
+# Find k-nearest neighbors of query_points in data_points
+knn_result <- get.knnx(data = data_points, query = query_points, k = k)
+
+colors$annotation_level_2[10:13] <- "TAMs"
+colors$annotation_level_2[14:21] <- "MGs"
+colors$annotation_level_2[55:61] <- "Ex_Neuron"
+colors$annotation_level_2[62:66] <- "Inh_Neuron"
+colors$annotation_level_2[39:42] <- colors$annotation_level_4_new[39:42]
+
+# Print results
+index = knn_result$nn.index
+dist = knn_result$nn.dist   
+
+NN = map_dfr(1:nrow(index), .f=function(i){
+  print(i)
+  data.frame(
+    barcodes = coords$barcodes[i],
+    degree = n_inp$degree[index[i,]] %>% mean(na.rm=T),
+    random = n_inp$nonrandom_spikes[index[i,]]%>% mean(na.rm=T),
+    firing_rate = n_inp$firing_rate[index[i,]]%>% mean(na.rm=T)
+  )
+})
+
+NN <- left_join(NN, joinWithGeneSets(object, gene_sets = "wnk_spak_genes"), by="barcodes")
+
+
+
+NN = map_dfr(1:nrow(index), .f=function(i){
+  data.frame(
+    UniqueCID = cell_types$UniqueCID[index[i,]],
+    dist = dist[i,],
+    id = n_inp$id[i],
+    degree_rank = node_rank %>% filter(id==n_inp$id[i]) %>% pull(degree_rank),
+    degree = n_inp$degree[i],
+    random = n_inp$nonrandom_spikes[i],
+    firing_rate = n_inp$firing_rate[i]
+  )
+})
+NN <- left_join(NN, cell_types, by="UniqueCID")
+NN <- left_join(NN, data.frame(CellType = colors$annotation_level_4_new, anno2 = colors$annotation_level_2))
+
+
+ggplot(NN,mapping = aes(x=wnk_spak_genes, y=degree))+geom_point()+
+  geom_smooth(se=F, method="lm")+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))
+
+
+plot_df <- NN %>% group_by(degree_rank, anno2) %>% count()
+plot_df$anno2 <- factor(plot_df$anno2, levels = unique(colors$annotation_level_2))
+
+
+plot_df
+ggplot()+
+  geom_col(plot_df, mapping=aes(x=degree_rank, y=n, fill=anno2), position = "fill")+
+  #scale_fill_manual(values=cc)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))
+
+
+
+plot_df <- plot_df %>% 
+                filter(anno2 %in% c("Ex_Neuron", "Inh_Neuron"))
+                #filter(degree_rank>100)
+ggplot()+
+  geom_smooth(plot_df, 
+              mapping=aes(x=degree_rank, y=n, color=anno2))+
+  #scale_fill_manual(values=cc)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))
+
+
+plot_df <- plot_df
+ggplot()+
+  geom_smooth(plot_df, 
+              mapping=aes(x=degree_rank, y=n, color=anno2), se=F)+
+  #scale_fill_manual(values=cc)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))
+
+```
+
+
+## Correlation of cell abundance and network parameter
+
+```{r}
+library(FNN)
+cc <- colors$colors;names(cc) <- colors$annotation_level_4_new
+getCellCor <- function(object, nodes, cell_types, k=2, drug_select, prams){
+
+  cells <- 
+    object %>% 
+    joinWithFeatures(features=cell_types)
+  
+  # subset drug
+  n_inp = 
+    nodes[!is.na(nodes$drug), ] %>% 
+    filter(.$drug == drug_select) %>% 
+    group_by(id,x,y) %>% 
+    select(id,x,y, {prams}) %>% 
+    summarise_all(.funs = mean)
+  
+  ggplot()+
+    geom_point(data = data.frame(x=cells$x, y=cells$y), mapping=aes(x,y))+
+    geom_point(data = n_inp[,c("x", "y")],mapping=aes(x,y), color="red")
+  
+  ## KNN
+  knn_result <- get.knnx(data = data.frame(x=cells$x, y=cells$y), query = n_inp[,c("x", "y")] , k = k)
+  
+  ## Summarize
+  NN = map_dfr(1:nrow(knn_result$nn.index), .f=function(i){
+      
+    cell_mat = 
+      cells[knn_result$nn.index[i,], cell_types] %>% colSums() %>% 
+      as.data.frame()
+    names(cell_mat)[1] <- "fraction"
+    cell_mat <- cell_mat %>% rownames_to_column("Cell_type")
+    
+    cell_mat <- 
+      cell_mat %>% 
+      mutate(
+        dist = mean(knn_result$nn.dist[i,]),
+        id = n_inp$id[i])
+      
+    return(cell_mat)
+})
+  NN <- NN %>% left_join(., n_inp, by="id")
+  
+  
+  ## run cor:
+  all = map_dfc(cell_types, .f=function(ct){
+    
+    inp=na.omit(NN)
+    cor_mat <- inp %>% 
+      filter(Cell_type==ct) %>%
+      select(fraction, {prams}) %>% 
+      cor()
+    out = cor_mat[1,] %>% as.data.frame()
+    names(out)=ct
+    return(out)
+  })
+  all <- all[-c(1), ]
+  return(all)
+}
+
+
+i=1
+for(i in 1:6){
+  print(i)
+  object <- readRDS(meta$spata2_new[i])
+  nodes <- object@spatial[[1]]$graph$nodes
+  edges <- object@spatial[[1]]$graph$edges
+  
+  all_drugs <- as.character(na.omit(nodes$drug %>% unique()))
+  
+  all_drugs_list = map(all_drugs, .f=function(drug_select){
+    prams <- names(nodes)[c(18:24, 27:46)]
+  cell_types <- names(cc)
+
+  all = getCellCor(object, nodes, cell_types, k=4, drug_select, prams)
+
+  all_sub <- 
+    all %>% t() %>% 
+    as.data.frame() %>% 
+    rownames_to_column("annotation_level_4_new") %>% 
+    left_join(., colors) %>% 
+    select(-annotation_level_4_new) %>% 
+    select(annotation_level_2, {prams}) %>% 
+    group_by(annotation_level_2) %>% 
+    summarise_all(.funs = mean) %>% 
+    as.data.frame()
+  })
+  names(all_drugs_list) <- all_drugs
+  
+  saveRDS(all_drugs_list, paste0(root_out, "/", meta$samples[i], "_cell_cor.RDS"))
+  
+  
+}
+
+
+
+matrix_list1 <- map(1:c(1:2, 5:6), .f=function(i){
+  all_sub <- readRDS(paste0(root_out, "/", meta$samples[i], "_cell_cor.RDS"))$nodrug 
+  rownames(all_sub) <- all_sub$annotation_level_2
+  #all_sub <- all_sub[,-c("firing_rate_whole_recording")]
+  all_sub <- all_sub[,-c(1,6)]
+  return(all_sub)
+  })
+matrix_list2 <- map(1:c(1:2, 5:6), .f=function(i){
+  all_sub <- readRDS(paste0(root_out, "/", meta$samples[i], "_cell_cor.RDS"))$`8mMK`
+  rownames(all_sub) <- all_sub$annotation_level_2
+  #all_sub <- all_sub[,-c("firing_rate_whole_recording")]
+  all_sub <- all_sub[,-c(1,6)]
+  return(all_sub)
+  })
+matrix_list3 <- map(1:c(1:2, 5:6), .f=function(i){
+  all_sub <- readRDS(paste0(root_out, "/", meta$samples[i], "_cell_cor.RDS"))$`5uMgabazine`
+  rownames(all_sub) <- all_sub$annotation_level_2
+  #all_sub <- all_sub[,-c("firing_rate_whole_recording")]
+  all_sub <- all_sub[,-c(1,6)]
+  return(all_sub)
+  })
+
+matrix_list <- matrix_list3
+all_sub <- Reduce("+", matrix_list) / length(matrix_list)
+all_sub <- all_sub[colors$annotation_level_2 %>% unique(), ]
+mat = all_sub[c(1:5, 7,9,10,16,17),] %>% t() %>% na.omit()
+
+pheatmap::pheatmap(mat,
+                   cluster_rows = F, cluster_cols = F,
+                   color = colorRampPalette(RColorBrewer::brewer.pal(9, "PiYG") )(50))
+
+
+```
+
+
+# WGCNA
+## Prepare WGCNA
+```{r}
+library(FNN)
+cc <- colors$colors;names(cc) <- colors$annotation_level_4_new
+getSumCounts <- function(object, nodes, sample_names, k=2, drug_select, prams){
+
+  cells <- 
+    object %>% 
+    joinWithFeatures(features=cell_types)
+  
+  # subset drug
+  n_inp = 
+    nodes[!is.na(nodes$drug), ] %>% 
+    group_by(id) %>% 
+    summarise(x=mean(x), y=mean(y))
+
+  
+  ## KNN
+  knn_result <- get.knnx(data = data.frame(x=cells$x, y=cells$y), query = n_inp[,c("x", "y")], k = 5)
+  
+  
+
+  ## Summarize
+  NN = map_dfr(1:nrow(knn_result$nn.index), .f=function(i){
+      
+    cell_mat = cells[knn_result$nn.index[i,], "barcodes"] 
+    cell_mat <- 
+      cell_mat %>% 
+      mutate(
+        dist = mean(knn_result$nn.dist[i,]),
+        id = n_inp$id[i])
+      
+    return(cell_mat)
+})
+  
+  NN <- left_join(NN, n_inp %>% select(id, x, y))
+  NN <- left_join(NN, data.frame(barcodes = cells$barcodes, xend = cells$x, yend=cells$y))
+  
+  #ggplot()+
+  #  geom_point(data = data.frame(x=cells$x, y=cells$y), mapping=aes(x,y))+
+  #  geom_point(data = n_inp[,c("x", "y")],mapping=aes(x,y), color="red")+
+  #  geom_segment(data = NN, mapping=aes(x=x,y=y,xend = xend,yend = yend))
+  
+  ## Get the Transcriptis
+  counts = map_dfc(unique(NN$id), .f=function(i){
+    
+    counts = SPATA2::getCountMatrix(object)[,NN %>% filter(id==i) %>% pull(barcodes)] %>% as.matrix() %>% rowSums() %>% as.data.frame()
+    names(counts)[1]=paste0(sample_names, "_", i)
+    return(counts)
+  }, .progress=T)
+  
+  
+  
+  
+  
+  return(counts)
+}
+
+
+i=1
+mea_transcription = map(1:nrow(meta), .f=function(i){
+  print(i)
+  object <- readRDS(meta$spata2_new[i])
+  nodes <- object@spatial[[1]]$graph$nodes
+  sample_names = meta$samples[i]
+  counts = 
+    getSumCounts(object, nodes, k=5, sample_names=sample_names) %>% 
+    as.matrix()
+  return(counts)
+})
+
+## Create and integrate Seurat data:
+print(i)
+object <- readRDS(meta$spata2_new[i])
+nodes <- object@spatial[[1]]$graph$nodes
+sample_names = meta$samples[i]
+n_inp = 
+    nodes[!is.na(nodes$drug), ] %>% 
+    filter(.$drug == "5uMgabazine") %>% 
+    group_by(id,) %>% 
+    select(id, {prams}) %>% 
+    summarise_all(.funs = mean)
+
+seurat <- Seurat::CreateSeuratObject(mea_transcription[[1]])
+
+## Add Node features
+seurat$sample = sample_names
+seurat$mea_id = colnames(seurat) %>% str_remove(., pattern=sample_names) %>%  str_remove(., pattern="_")
+seurat@meta.data <- cbind(seurat@meta.data, left_join(data.frame(id = seurat$mea_id), n_inp))
+
+seurat_all = seurat
+
+for(i in c(2,5,6)){
+  print(i)
+object <- readRDS(meta$spata2_new[i])
+nodes <- object@spatial[[1]]$graph$nodes
+sample_names = meta$samples[i]
+n_inp = 
+    nodes[!is.na(nodes$drug), ] %>% 
+    filter(.$drug == "5uMgabazine") %>% 
+    group_by(id,) %>% 
+    select(id, {prams}) %>% 
+    summarise_all(.funs = mean)
+
+seurat <- Seurat::CreateSeuratObject(mea_transcription[[i]])
+
+## Add Node features
+seurat$sample = sample_names
+seurat$mea_id = colnames(seurat) %>% str_remove(., pattern=sample_names) %>%  str_remove(., pattern="_")
+seurat@meta.data <- cbind(seurat@meta.data, left_join(data.frame(id = seurat$mea_id), n_inp))
+
+
+seurat_all <- merge(seurat_all, seurat)
+
+}
+
+library(Seurat)
+seurat_all <- JoinLayers(seurat_all)
+
+saveRDS(seurat_all, paste0(root_out,"/seurat_all_MEA.RDS"))
+
+seurat_all <- readRDS(paste0(root_out,"/seurat_all_MEA.RDS"))
+```
+
+
+## WGCNA:
+
+```{r}
+library(WGCNA)
+library(hdWGCNA)
+library(igraph)
+library(patchwork)
+
+seurat_obj = readRDS(paste0(root_out,"/seurat_all_MEA.RDS"))
+
+## Run Preprocessing
+seurat_obj <- 
+  seurat_obj %>% 
+  FindVariableFeatures() %>% 
+  NormalizeData() %>% 
+  ScaleData() %>% 
+  RunPCA()
+## Run WGCNA
+seurat_obj <- 
+  hdWGCNA::SetupForWGCNA(seurat_obj, gene_select = "fraction",fraction = 0.01,wgcna_name = "vis") %>% 
+  hdWGCNA::SetDatExpr(assay="RNA") %>% 
+  hdWGCNA::TestSoftPowers()
+wrap_plots(hdWGCNA::PlotSoftPowers(seurat_obj), ncol=2)
+seurat_obj <- hdWGCNA::ConstructNetwork(seurat_obj,
+                                        soft_power=8,
+                                        deepSplit=2,
+                                        minModuleSize=20,
+                                        tom_name='MEA_Analysis',
+                                        overwrite_tom=TRUE)
+hdWGCNA::PlotDendrogram(seurat_obj, main='WGCNA dendrogram')
+seurat_obj <- hdWGCNA::ModuleEigengenes(seurat_obj, assay = "RNA",npcs = 10)
+seurat_obj <- hdWGCNA::ModuleConnectivity(seurat_obj)
+
+
+```
+
+
+```{r}
+options(future.globals.maxSize= 8500*1024^2)
+
+seurat_obj <- RunModuleUMAP(
+  seurat_obj,
+  n_hubs = 5,
+  n_neighbors=5,
+  min_dist=0.1,
+  spread=2,
+  wgcna_name = 'vis',
+  target_weight=0.05,
+  supervised=TRUE
+)
+
+p=ModuleUMAPPlot(
+  seurat_obj,
+  edge.alpha=0.25,
+  sample_edges=TRUE,
+  edge_prop=0.2, 
+  label_hubs=2,
+  return_graph=T,
+  keep_grey_edges=FALSE)
+
+```
+
+```{r}
+
+library(igraph)
+library(scattermore)
+library(ggrepel)
+seurat_obj@misc$vis$MEs[ ] %>% pheatmap::pheatmap( cluster_rows = T)
+plotdf <- seurat_obj@misc$vis$module_umap %>% filter(color!="grey60")
+plotdf2 <- as_long_data_frame(p)
+plotdf2 <- plotdf2 %>% filter(from_name %in% plotdf$gene)
+
+# Create Plot of Expression Network
+plot_p <- ggplot()+theme_void()+coord_fixed()
+dat1 <- plotdf2 %>% filter(from_kME>0.5)
+plot_p <- plot_p+geom_segment(data=dat1, mapping = aes(x=from_UMAP1, y=from_UMAP2, xend=to_UMAP1, yend=to_UMAP2), size=dat1$from_kME*0.1, alpha=dat1$from_kME*0.1)
+plot_p <- plot_p+geom_scattermore(data=plotdf, mapping=aes(x=UMAP1, y=UMAP2),size=plotdf$kME*2, alpha=0.5, color=gplots::col2hex(plotdf$color), pointsize=4)
+plot_p <- plot_p+theme_void()+geom_text_repel(data=plotdf %>% group_by(module) %>% summarise(UMAP1=mean(UMAP1), UMAP2=mean(UMAP2)), mapping=aes(x=UMAP1, y=UMAP2,label=module))
+plot_p <- plot_p+geom_text_repel(data=plotdf %>% group_by(module) %>% top_n(., 15, wt=kME), mapping=aes(x=UMAP1, y=UMAP2,label=gene),size=2)
+plot_p+
+     theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.25),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=1), 
+          axis.text.y = element_text(colour="black"))
+```
+
+```{r}
+## DE Analysis
+ModuleCorrelogram(seurat_obj)
+```
+
+## WGCNA Correlation analysis
+```{r}
+
+seurat_obj <- ModuleTraitCorrelation(
+  seurat_obj,
+  traits = prams)
+
+
+seurat_obj <- ModuleTraitCorrelation(
+  seurat_obj,
+  traits = c("betweenness_centrality", "degree","degree_centrality", "firing_rate", "nonrandom_spikes" ))
+
+
+mt_cor <- GetModuleTraitCorrelation(seurat_obj)
+
+col=colorRampPalette(rev(c(RColorBrewer::brewer.pal(9, "RdBu"))))
+
+
+k = t(mt_cor$cor$all_cells) %>% as.data.frame() %>% pheatmap::pheatmap()
+
+k$tree_row$order
+
+mat <- t(mt_cor$cor$all_cells)
+p_mat = t(mt_cor$pval$all_cells)
+
+
+library(ggcorrplot)
+ggcorrplot(mat[k$tree_row$order, k$tree_col$order] %>% as.data.frame(), 
+           method = "circle", 
+           outline.color = "black", 
+           lab_size=1,
+           insig="pch",
+           pch="X",
+           p.mat=p_mat[k$tree_row$order, k$tree_col$order])+
+  scale_fill_gradientn(colours = col(50), name="", limits = c(-0.4,0.4), oob=scales::squish) +
+  guides(fill = guide_colourbar(barwidth = 0.3, barheight = 8, ticks =F, frame.colour="black"), label=F)+
+  ggtitle("Module correlation to treatment condition")+
+  xlab("")+ylab("")+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.25),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=1), 
+          axis.text.y = element_text(colour="black"))
+
+```
+
+## Get gene set enrichment
+
+```{r}
+library(DOSE)
+library(enrichplot)
+library(clusterProfiler)
+
+module = "saddlebrown"
+
+GSEA_all <- map(unique(seurat_obj@misc$vis$wgcna_modules$module), .f=function(module){
+  out_kME <- 
+  data.frame(SYMBOL = seurat_obj@misc$vis$wgcna_modules$gene_name,
+           kME = seurat_obj@misc$vis$wgcna_modules[,paste0("kME_", module)])
+out_genes <- bitr(out_kME$SYMBOL, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Hs.eg.db")
+out_kME <- left_join(out_kME,out_genes)
+  out_kME <- out_kME %>% filter(!is.na(ENTREZID)) %>% arrange(desc(kME))
+values = out_kME$kME;names(values) <- out_kME$ENTREZID
+GSEA <- clusterProfiler::gseKEGG(values)
+
+return(GSEA)
+})
+
+
+names(GSEA_all) <- unique(seurat_obj@misc$vis$wgcna_modules$module)
+
+GSEA_GO <- map(unique(seurat_obj@misc$vis$wgcna_modules$module), .f=function(module){
+  out_kME <- 
+  data.frame(SYMBOL = seurat_obj@misc$vis$wgcna_modules$gene_name,
+           kME = seurat_obj@misc$vis$wgcna_modules[,paste0("kME_", module)])
+out_genes <- bitr(out_kME$SYMBOL, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Hs.eg.db")
+out_kME <- left_join(out_kME,out_genes)
+  out_kME <- out_kME %>% filter(!is.na(ENTREZID)) %>% arrange(desc(kME))
+values = out_kME$kME;names(values) <- out_kME$ENTREZID
+GSEA <- clusterProfiler::gseGO(values,ont="ALL", keyType = "ENTREZID",OrgDb = "org.Hs.eg.db")
+
+return(GSEA)
+})
+names(GSEA_GO) <- unique(seurat_obj@misc$vis$wgcna_modules$module)
+
+enrichplot::dotplot(GSEA_GO$royalblue, showCategory=60)
+
+names(GSEA_all)
+module = "royalblue"
+GSEA_GO[[module]]@result %>% 
+  arrange(desc(enrichmentScore)) %>% 
+  head(20) %>%
+  arrange((enrichmentScore)) %>% 
+  select(Description, enrichmentScore, p.adjust) %>% 
+  mutate(Description = factor(Description, levels=Description)) %>% 
+  ggplot()+
+  geom_point(mapping=aes(x=enrichmentScore, y=Description, size=-log(p.adjust), fill=enrichmentScore), shape=21)+
+  scale_fill_gradientn(colors=viridis::inferno(50))+
+  guides(fill = guide_colourbar(barwidth = 0.3, barheight = 8, ticks =F, frame.colour="black"), label=F)+
+  xlab("")+ylab("")+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.25),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=1), 
+          axis.text.y = element_text(colour="black"))
+
+
+
+seurat_obj <- Seurat::AddModuleScore(seurat_obj, features=list(wnk_spak_genes=wnk_spak_genes), name="pw")
+
+
+inp_MEs = seurat_obj@misc$vis$MEs
+pw=seurat_obj$pw1
+
+map(1:ncol(inp_MEs), ~cor(pw, inp_MEs[,.x])) %>% unlist() %>% as.data.frame() %>% mutate(modules=names(inp_MEs)) %>% arrange(desc(.))
+
+royalblue
+
+ggplot(mapping=aes(x=inp_MEs[,"royalblue"], y=pw))+geom_point()+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.25),
+          axis.text.x = element_text(colour="black",
+                                     angle = 0, vjust = 0.5, hjust=1), 
+          axis.text.y = element_text(colour="black"))
+
+
+## Module to GBMap 
+
+scRef <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBMap_Neuron.RDS")
+scRef$annotation_level_2[is.na(ref$annotation_level_2)] <- "Neurons"
+
+
+scRef$annotation_level_4 <- ref$annotation_level_4 %>% 
+  str_replace_all(., "-", "_") %>% 
+  str_replace_all(., " ", "_") %>% 
+  str_replace_all(., "/", "_")
+
+colors <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBM_Neuron_colors.RDS")
+colors$annotation_level_4_new <- 
+  colors$annotation_level_4 %>% 
+  str_replace_all(., "-", "_") %>% 
+  str_replace_all(., " ", "_") %>% 
+  str_replace_all(., "/", "_")
+```
+
+
+## Create a module score:
+```{r}
+
+# Create module Score
+#scRef <- ref
+#scRef <- Seurat::AddModuleScore(scRef, features = list_genes, name=names(list_genes), assay = "SCT")
+#names(list_genes)
+
+modules <- seurat_obj@misc$vis$wgcna_modules$color %>% unique()
+modules <- modules[2:length(modules)]
+list_genes_imp <- map(.x=modules[1:length(modules)], .f=function(i){
+
+  importance <- 
+    seurat_obj@misc$vis$wgcna_modules %>% 
+    filter(module==i) %>% 
+    select(paste0("kME_",i))
+
+  return(importance)
+  
+})
+names(list_genes_imp) <- modules
+
+# get the amount of genes from each signature that is expressed
+
+Module_signature <- map(list_genes_imp, .f=function(genes){
+  
+  # weighted mean expression
+  mat <- Seurat::GetAssayData(scRef, assay = "SCT")
+  mat <- mat[na.omit(match(rownames(genes), rownames(mat))),] %>% as.data.frame()
+  
+  mat <- mat*genes[rownames(mat), ]
+  
+  mean <- colMeans(mat)
+  out <- apply(mat, 2, function(x){ length(which(x!=0))/length(x) })*100
+  names(out) <- colnames(mat)
+  mean=mean*out
+
+  
+  
+  return(list(mean, out))
+  
+  
+  
+  
+}, .progress = T)
+names(Module_signature) <- paste0(names(list_genes_imp), 1:length(names(list_genes_imp)))
+
+for(n in names(Module_signature)){
+  scRef@meta.data[,n] <- Module_signature[[n]][[1]]
+}
+
+names(Module_signature)
+
+```
+
+## Plot modules 
+```{r}
+
+module <- "lightgreen28"
+
+library(Seurat)
+f <- FeaturePlot(scRef, features = module, order=T)
+
+library(scattermore)
+p <- ggplot(data=f$data)+
+  geom_scattermore(mapping=aes(UMAP_1,UMAP_2), pointsize = 8, color="black")+
+  geom_scattermore(mapping=aes(UMAP_1,UMAP_2), pointsize = 7, color="white")+
+  geom_scattermore(mapping=aes(UMAP_1,UMAP_2, color=!!sym(module)), pointsize=2)
+
+col=colorRampPalette(c("#FFFFFF", RColorBrewer::brewer.pal(9, "Reds")))
+p <- p+
+    scale_colour_gradientn(colours = col(50),
+                           #limit=c(0,1.5), 
+                           oob = scales::squish, na.value = "white")+
+    ylab("UMAP2")+xlab("UMAP1")+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"), 
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()
+p
+
+
+
+```
+
+
+```{r}
+Module_score <- names(Module_signature)
+data_enrichment <- scRef@meta.data[,c("annotation_level_4", Module_score)]
+
+enrichment <- 
+  data_enrichment %>% 
+  group_by(annotation_level_4) %>% 
+  summarise_all(.funs = base::mean)
+
+size <- map_dfc(1:length(Module_signature), ~ as.data.frame(Module_signature[[.x]][[2]]))
+names(size) <- names(Module_signature)
+size <- 
+  size %>% 
+  mutate(annotation_level_4=scRef$annotation_level_4) %>% 
+  group_by(annotation_level_4) %>% 
+  summarise_all(.funs = mean)
+
+
+#tumors <- colors[colors$annotation_level_2 %in% c("Differentiated-like", "Stem-like"), ]$annotation_level_4
+tumors <- colors$annotation_level_4_new
+enrichment <- enrichment %>% filter(annotation_level_4 %in% tumors) %>% as.data.frame()
+rownames(enrichment) <- enrichment$annotation_level_4
+enrichment$annotation_level_4 <- NULL
+
+size <- size %>% filter(annotation_level_4 %in% tumors) %>% as.data.frame()
+rownames(size) <- size$annotation_level_4
+size$annotation_level_4 <- NULL
+
+enrichment_mat <- scales::rescale(as.matrix(enrichment), c(0,1)) %>% as.data.frame()
+size <- scales::rescale(as.matrix(size), c(0,1)) %>% as.data.frame()
+dim(enrichment)
+dim(size)
+
+enrichment <- 
+  enrichment_mat %>%
+  rownames_to_column(var = "gene") %>%
+  gather(cell, count, -gene)
+
+size <- 
+  size %>%
+  rownames_to_column(var = "gene") %>%
+  gather(cell, count, -gene)
+
+enrichment$size <- size$count
+
+colors <- 
+  colors %>% 
+  filter(annotation_level_4!="Neuron")
+
+
+
+col=colorRampPalette(c("#FFFFFF", RColorBrewer::brewer.pal(9, "Reds")))
+#col=colorRampPalette(rev(RColorBrewer::brewer.pal(9, "PRGn")))
+pheatmap::pheatmap(enrichment_mat %>% cor())
+
+
+#rank <- map_dbl(1:ncol(seurat_obj@misc$vis$MEs), ~ cor(seurat_obj@misc$vis$MEs[.x], seurat_obj$random_spikes))
+#names(rank) <- colnames(seurat_obj@misc$vis$MEs)
+#rank <- rank[modules]
+#names(rank) <- paste0(names(rank), 1:length(names(rank)))
+#rank <- rank[order(rank)]
+
+# "pink24", "royalblue14",
+
+#names(Module_signature)
+enrichment <- 
+  enrichment %>% 
+  filter(cell %in%c("skyblue37", "lightcyan31", "lightgreen28", "darkred4", "darkolivegreen26"))
+
+#names(Module_signature)
+#enrichment <- 
+#  enrichment %>% 
+#  filter(cell %in%c("royalblue14", "blue9"))
+
+library(ggcorrplot)
+plot_1 <- 
+  #ggcorrplot(enrichment, method = "circle", outline.color = "black")+
+  ggplot(enrichment)+
+  geom_point(aes(x = gene, y = cell, size = size, fill=count),colour="black",pch=21)+
+  scale_y_discrete(limits = names(rank))+
+  scale_x_discrete(limits = colors$annotation_level_4_new)+
+  scale_fill_gradientn(colours = col(50), name="", limits=c(0,0.001), oob=scales::squish)+
+  scale_size(range = c(0,3))+
+  guides(fill = guide_colourbar(barwidth = 0.3, barheight = 8, ticks =F, frame.colour="black"), label=F)+
+  ggtitle("Expression vs Metabolism")+
+  xlab("")+ylab("")+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=1), 
+          axis.text.y = element_text(colour="black"))+
+  coord_fixed()
+
+plot_1
+
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+
+modules <- c("tan", "salmon", "yellow", "red", "purple")
+
+gcSample <- map(.x=modules, .f=function(i){
+  genes <- 
+    seurat_obj@misc$vis$wgcna_modules %>% 
+    filter(module==i) %>% 
+    rownames()
+  
+  genes <- c(unique(genes))
+})
+
+all <- unlist(gcSample)
+names(gcSample) <- modules
+
+
+library(DOSE)
+library(enrichplot)
+library(clusterProfiler)
+xx <- compareCluster(gcSample, 
+                     fun="enrichGO",
+                     ont ="BP", 
+                     keyType = "SYMBOL", 
+                     OrgDb = "org.Hs.eg.db")
+
+edo <- pairwise_termsim(xx)
+
+plot <- 
+  emapplot(edo, showCategory=50, cex_category=0.01, 
+           pie.params = list(pie = "equal"), 
+           cex_line = 0.3,
+           layout="graphopt", min_edge=0.15, repel=T)
+
+res_map <- 
+  edo@compareClusterResult %>% 
+  filter(Description %in% plot$data$name) %>% 
+  group_by(Description, Cluster) %>% 
+  summarise(p = mean(p.adjust)) %>% 
+  ungroup() 
+
+anno <- data.frame(name=unique(res_map$Description), type=map(.x=unique(res_map$Description), .f=function(i){
+  c <- res_map %>% filter(Description==i) %>% pull(Cluster)
+  return(c[res_map %>% filter(Description==i) %>% pull(p) %>% which.min()] %>% as.character())
+  }) %>% unlist())
+
+library(ggrepel)
+plot$data <- plot$data %>% left_join(., anno, by="name")
+
+col <- plot$data$type %>% unique() %>% rev() %>% gplots::col2hex()
+
+ggplot(data=plot$data)+
+  plot$layers[[1]]+
+  geom_point(mapping = aes(x=x, y=y, fill=type, size=size), colour="black",pch=21)+
+  scale_fill_manual(values=col)+
+  theme_bw() +
+  xlab("Dim 1")+ylab("Dim 2")+
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"), 
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  geom_text_repel(mapping= aes(x,y, label=name), size=2)+
+  ggtitle("GeneSet Enrichment Analysis")
+
+
+
+
+```
+
+
+
+
+
+
+
+```{r}
+object_list <- readRDS(samples_deconv_df %>% filter(Samples_ID=="404_R") %>% pull(path_deconv))
+
+for(i in 1:length(object_list$cell_map)){object_list$cell_map[[i]]$match <- as.character(object_list$cell_map[[i]]$match)}
+cell_types <- object_list$cell_map %>% map_dfr(., ~.x %>% as.data.frame())
+
+## Annotation with GBMap_new
+intersect = intersect(cell_types$match %>% unique(), colnames(ds.ref2))
+new_annotation_spatial = ds.ref2@meta.data[intersect,] %>% as.data.frame() %>% rownames_to_column("match") %>% select(match, predicted.cells)
+cell_types <- left_join(cell_types, new_annotation_spatial)
+cell_types[!is.na(cell_types$predicted.cells), "celltypes"] <- 
+  cell_types[!is.na(cell_types$predicted.cells), "predicted.cells"] 
+
+## plot seurat
+ds.ref2$cells = factor(ds.ref2$predicted.cells, levels = myeloid_color$cell_type)
+color_sc_myeloid = myeloid_color$color;names(color_sc_myeloid)=myeloid_color$cell_type
+DimPlot( subset(ds.ref2, cells = intersect) , 
+         group.by="cells", reduction = "ref.umap", 
+         label = F, raster=T, pt.size = 20, 
+         raster.dpi = c(1512, 1512))+
+  scale_color_manual(values=color_sc_myeloid)
+
+
+
+table(cell_types$celltypes)
+
+object <- object_list$object %>% SPATA2::updateSpataObject()
+colors <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBM_Neuron_colors.RDS")
+colors$annotation_level_4new <- 
+  colors$annotation_level_4 %>% 
+  str_replace_all(" ", "_") %>% 
+  str_replace_all("-", "_") %>% 
+  str_replace_all("/", "_")
+# Add new myeloid lables 
+cc_myeloid = colors[colors$annotation_level_2=="Myeloid", "colors"] %>% pull(colors)
+
+colors <- rbind(colors %>% filter(annotation_level_2!="Myeloid"),
+                data.frame(annotation_level_2="Myeloid", 
+           annotation_level_4 = new_annotation_spatial$predicted.cells %>% unique(), 
+           n=1, colors = colorRampPalette(c(cc_myeloid[3], cc_myeloid[11]))(length(new_annotation_spatial$predicted.cells %>% unique())),
+           annotation_level_4new = new_annotation_spatial$predicted.cells %>% unique()))
+
+cell_types$celltypes <- factor(cell_types$celltypes, levels = colors$annotation_level_4new)
+cc <- colors$colors;names(cc) <- colors$annotation_level_4new
+
+cell_types
+
+ggplot(cell_types, aes(x, y, fill = celltypes))+
+  geom_point(shape=21, size=1)+
+  scale_fill_manual(values=cc)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  SPATA2::ggpLayerAxesSI(object)+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+library(ggforce)
+ggplot(cell_types, aes(x, y, group = -1L)) +
+    geom_voronoi_tile(aes(fill = celltypes), max.radius = 10, colour = 'black', linewidth=0.1)+
+    scale_fill_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  SPATA2::ggpLayerAxesSI(object)+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+## Plot only microglia cells 
+myeloid_color
+cc <- rep("lightgrey",nrow(colors)) ; names(cc) <- colors$annotation_level_4new
+cc[c(myeloid_color %>% filter(cell_type %in% names(cc)) %>% pull(cell_type))] = 
+  myeloid_color %>% filter(cell_type %in% names(cc)) %>% pull(color)
+
+library(ggforce)
+ggplot(cell_types, aes(x, y, group = -1L)) +
+    geom_voronoi_tile(aes(fill = celltypes), max.radius = 10, colour = 'black', linewidth=0.1)+
+    scale_fill_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  SPATA2::ggpLayerAxesSI(object)+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+
+```
+
+
+# Graph Visulatisation of the Electrogenomic data:
+```{r}
+#Colors:
+cc <- colors$colors;names(cc) <- colors$annotation_level_4_new
+i=6
+object <- readRDS(meta$spata2_new[i])
+plotSurface(object)
+
+object@used_genesets = rbind(data.frame(ont = "wnk_spak_genes", gene=wnk_spak_genes), object@used_genesets)
+
+
+limits=c(0.1, 0.8)
+p = plotSurface(object, color_by = "wnk_spak_genes", alpha_by="wnk_spak_genes", display_image=F, limits=limits, oob=scales::squish)+
+  scale_alpha(limits=limits,oob=scales::squish)
+p
+
+cell_types <- object@spatial[[1]]$cytospace
+
+
+p = plotSurface(object, pt_alpha=0)
+
+library(ggforce)
+p=ggplot()+
+  geom_voronoi_tile(data =cell_types, mapping=aes(x=x_sc,y=y_sc, group = -1L, fill = CellType), 
+                      max.radius = 3, colour = 'black', linewidth=0.1, alpha=1)+
+    scale_fill_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")+
+  Seurat::NoLegend()
+
+
+## Add MEA Grid
+library(ggnewscale)
+nodes <- object@spatial[[1]]$graph$nodes
+edges <- object@spatial[[1]]$graph$edges
+
+## Create graph:
+library(igraph)       # graph object
+library(GephiForR)    # ForceAtlas 2
+library(ggraph)       # modern plotting
+
+f_nodes = nodes %>% filter(drug=="8mMK")
+f_edges = edges %>% filter(drug=="8mMK")
+
+g = graph_from_data_frame(d=edges %>% filter(drug=="8mMK") %>% select(from, to, weight))
+
+# run ForceAtlas 2
+coords_out <- layout.forceatlas2(
+  g,
+  iterations   = 400,   
+  linlog       = TRUE, 
+  gravity      = 1,
+  scalingratio = 10,
+  plotlabels=F
+)
+
+coords_out <- coords_out %>% as.data.frame() %>% rownames_to_column("id")
+f_nodes <- left_join(f_nodes, coords_out, by="id")
+f_edges <- cbind(f_edges, 
+                 cbind(
+                   left_join(data.frame(id=f_edges$from), coords_out) %>% select(V1, V2) %>% rename(x_coords_from = V1, y_coords_from = V2),
+                   left_join(data.frame(id=f_edges$to), coords_out) %>% select(V1, V2) %>% rename(x_coords_to = V1, y_coords_to = V2)
+                   )
+                 )
+
+
+# draw it
+ggplot()+
+  geom_point(f_nodes, mapping=aes(x=V1, y=V2, size=degree))+
+  geom_segment(data = f_edges %>% arrange(weight), 
+               mapping=aes(x=x_coords_from,y=y_coords_from,xend=x_coords_to,yend=y_coords_to, color =weight, 
+                           alpha=weight, 
+                           size=weight), alpha=0.1)+
+  scale_size(range=c(0.1,0.3))+
+  scale_color_viridis_c(, 
+                        limits=c(0, 400), 
+                        oob=scales::squish)
+  
+
+
+
+cond <- nodes$drug %>% unique()
+drug_select = c(nodes$drug %>% unique())[3]
+weight_lim = 0.4
+
+n_inp = nodes[!is.na(nodes$drug), ] %>% filter(.$drug == drug_select)
+e_inp = edges %>% filter(.$drug==drug_select) %>% filter(weight>weight_lim)
+
+
+p+
+  ggnewscale::new_scale_color()+
+  geom_point(data = n_inp, mapping=aes(x=x,y=y,alpha=degree), size=1)+
+  geom_segment(data = e_inp %>% arrange(weight), 
+               mapping=aes(x=x,y=y,xend=xend,yend=yend, color =weight, alpha=weight, size=weight), alpha=0.1)+ 
+  scale_size(range=c(0.1,0.3))+
+  scale_color_viridis_c(, 
+                        limits=c(0, 400), 
+                        oob=scales::squish)
+
+ggplot()+
+  geom_point(data = n_inp, mapping=aes(x=x,y=y,alpha=degree), size=2, color="black")+
+  geom_segment(data = e_inp, 
+               mapping=aes(x=x,y=y,xend=xend,yend=yend, color =weight, alpha=weight, size=weight))+ 
+  scale_size(range=c(0.1,1))+
+  scale_color_viridis_c(option="B", limits=c(0.3, 0.7), oob=scales::squish)
+
+
+```
+
+## 3D Visualisation two layer:
+
+```{r}
+## Graph visualisation in 3D : 
+
+# ── packages ────────────────────────────────────────────────────────────
+library(dplyr)      # pipes & joins
+library(plotly)     # 3-D plotting
+library(igraph)     # your graph object  (optional if you already have edgelist)
+
+# ── 1. build one tidy "node table" --------------------------------------
+force_coords   <- data.frame(id = coords_out$id, x_layout = coords_out$V1, y_layout = coords_out$V2)
+spatial_coords <- data.frame(id = f_nodes$id, x_spat   = f_nodes$x, y_spat   = f_nodes$y)
+
+## Scale Coords into the same size:
+
+spatial_coords$x_spat <- scales::rescale(spatial_coords$x_spat, range(force_coords$x_layout) )
+spatial_coords$y_spat <- scales::rescale(spatial_coords$y_spat, range(force_coords$y_layout) )
+
+nodes <- force_coords %>% inner_join(spatial_coords, by = "id")
+nodes <- left_join(nodes, f_nodes %>% select(id, degree, region))
+
+# ── 2. choose the vertical gap between the layers -----------------------
+z_layout <- 0      # ForceAtlas layer
+z_spat   <- 50     # spatial layer (any numeric value)
+
+# ── 3. convert igraph edges to a data frame (or use your own) -----------
+edges <- f_edges %>% filter(weight>20)
+
+# ── 3. helper that returns a list of plotly traces ---------
+library(viridisLite)   # nice perceptual palette
+library(scales)        # col_numeric()
+
+weight_pal <- col_numeric(
+  viridis(256, option = "D"),           # or any palette you like
+  domain = range(edges$weight, na.rm = TRUE)
+)
+
+
+make_edge_traces_layout <- function(edge_tbl, xs, ys, z) {
+  edge_tbl %>%
+    left_join(nodes %>% select(id, x0 = {{ xs }}, y0 = {{ ys }}),
+              by = c("from" = "id")) %>%
+    left_join(nodes %>% select(id, x1 = {{ xs }}, y1 = {{ ys }}),
+              by = c("to"   = "id")) %>%
+    mutate(col = weight_pal(weight)) %>%           # map colour here
+    pmap(function(x0, y0, x1, y1, col, ...) {
+      list(
+        x = c(x0, x1), y = c(y0, y1), z = c(z, z),
+        type  = "scatter3d", mode = "lines",
+        line  = list(width = 2, color = col),      # <- coloured by weight
+        showlegend = FALSE
+      )
+    })
+}
+
+# ── 4. create the three trace groups -----------------------
+z_layout <- 50
+z_spat   <- 0   # change to taste
+
+edge_traces_layout <- make_edge_traces_layout(edges, x_layout, y_layout, z_layout)
+edge_traces_spat   <- make_edge_traces_layout(edges, x_spat,   y_spat,   z_spat)
+
+
+library(dplyr)
+library(purrr)
+library(RColorBrewer)   # Set2 palette
+
+region_levels <- sort(unique(nodes$region))
+pal <- setNames(
+  brewer.pal(max(3, length(region_levels)), "Set2")[seq_along(region_levels)],
+  region_levels
+)
+
+connector_traces <- nodes %>%
+  pmap(function(id, x_layout, y_layout, x_spat, y_spat, region, ...) {
+    list(
+      x = c(x_layout, x_spat),
+      y = c(y_layout, y_spat),
+      z = c(z_layout,  z_spat),
+      type  = "scatter3d",
+      mode  = "lines",
+      line  = list(width = 2,
+                   color = pal[[region]]),   # <- use the palette here
+      hovertext = id,                        # optional: tool-tip
+      showlegend = FALSE
+    )
+  })
+
+# ── 5. build the final plotly figure -----------------------
+p <- plot_ly() %>%
+
+  # ForceAtlas-2 nodes
+  add_trace(
+    data = nodes,
+    x = ~x_layout, 
+    y = ~y_layout, 
+    z = z_layout,
+    size = ~degree,
+    type = "scatter3d", mode = "markers",
+    marker = list(color = "tomato"),
+    name   = "ForceAtlas2 layout"
+  ) %>%
+
+  # spatial-coordinate nodes
+  add_trace(
+    data = nodes,
+    x = ~x_spat, 
+    y = ~y_spat, 
+    z = z_spat,
+    color = ~region,
+    colors = "Set2",
+    type = "scatter3d", mode = "markers",
+    marker = list(size = 8),
+    name   = "Spatial layer"
+  )
+
+# add edges and connectors
+#all_traces <- c(edge_traces_layout, edge_traces_spat, connector_traces)
+all_traces <- c(edge_traces_layout, connector_traces)
+for (tr in all_traces) {
+  p <- exec(add_trace, p, !!!tr)   # splice ‘tr’ into add_trace()
+}
+
+p <- p %>%
+  layout(
+    scene = list(
+      xaxis = list(
+        title          = "",      # no axis title
+        showticklabels = FALSE,   # <- hides the numbers & tick text
+        showgrid       = TRUE,   # optional: kill the grey grid
+        zeroline       = TRUE    # optional: hide the axis line itself
+      ),
+      yaxis = list(
+        title          = "",
+        showticklabels = FALSE,
+        showgrid       = TRUE,
+        zeroline       = TRUE
+      ),
+      zaxis = list(
+        title          = "",
+        showticklabels = FALSE,
+        showgrid       = TRUE,
+        zeroline       = TRUE
+      )
+    )
+  )
+
+
+
+p %>%
+  layout(
+    scene = list(
+      xaxis = list(title = ""),
+      yaxis = list(title = ""),
+      zaxis = list(title = "")
+    )
+  )
+
+
+```
+
+
+
+
+## 3D Visualisation three layer:
+
+```{r}
+i=6
+object <- readRDS(meta$spata2_new[i])
+plotSurface(object)
+object@used_genesets = rbind(data.frame(ont = "wnk_spak_genes", gene=wnk_spak_genes), object@used_genesets)
+
+plotSurface(object, color_by="wnk_spak_genes", smooth=F)
+
+
+## Add MEA Grid
+nodes <- object@spatial[[1]]$graph$nodes
+edges <- object@spatial[[1]]$graph$edges
+## Filter condition:
+f_nodes = nodes %>% filter(drug=="8mMK")
+f_edges = edges %>% filter(drug=="8mMK")
+
+
+## Test 
+plotSurface(object, color_by="wnk_spak_genes", smooth=F, pt_alpha=0)
+
+plotSurface(object, color_by="wnk_spak_genes", smooth=F, display_image=T)+
+  ggnewscale::new_scale_color()+
+  geom_point(data = f_nodes, mapping = aes(x=x, y=y, fill=region),alpha=0.5, size=4,shape=21, color="white")
+
+
+## Create Layout 
+g = graph_from_data_frame(d=f_edges %>% select(from, to, weight))
+coords_out <- layout.forceatlas2(
+  g,
+  iterations   = 300,   
+  linlog       = TRUE, 
+  gravity      = 10,
+  scalingratio = 10,
+  plotlabels=F
+)
+
+```
+
+
+```{r}
+## Graph visualisation in 3D : 
+coords_out <- coords_out %>% as.data.frame() %>% rownames_to_column("id")
+f_nodes <- left_join(f_nodes, coords_out, by="id")
+f_edges <- cbind(f_edges, 
+                 cbind(
+                   left_join(data.frame(id=f_edges$from), coords_out) %>% select(V1, V2) %>% rename(x_coords_from = V1, y_coords_from = V2),
+                   left_join(data.frame(id=f_edges$to), coords_out) %>% select(V1, V2) %>% rename(x_coords_to = V1, y_coords_to = V2)
+                   )
+                 )
+
+## Plot Inputs
+force_coords   <- data.frame(id = coords_out$id, x_layout = coords_out$V1, y_layout = coords_out$V2)
+spatial_coords <- data.frame(id = f_nodes$id, x_spat   = f_nodes$x, y_spat   = f_nodes$y)
+expression <- joinWithGeneSets(object, gene_sets = "wnk_spak_genes") %>% select(x,y,wnk_spak_genes)
+names(expression)[3] <- "value"
+
+## Test layout
+ggplot()+
+  geom_point(data = force_coords, mapping=aes(x=x_layout,y=y_layout), size=2, color="black")+
+  geom_segment(data = f_edges %>% filter(weight>20), 
+               mapping=aes(x=x_coords_from,y=y_coords_from,xend=x_coords_to,yend=y_coords_to, color =weight, alpha=weight, size=weight))+ 
+  scale_size(range=c(0.1,1))+
+  scale_color_viridis_c(option="B", 
+                        #limits=c(0.3, 0.7), 
+                        oob=scales::squish)
+
+
+
+## Re-Scale layout coords
+
+force_coords$x_layout <- scales::rescale(force_coords$x_layout, range(spatial_coords$x_spat) )
+force_coords$y_layout <- scales::rescale(force_coords$y_layout, range(spatial_coords$y_spat) )
+nodes <- force_coords %>% inner_join(spatial_coords, by = "id")
+nodes <- left_join(nodes, f_nodes %>% select(id, degree, region))
+
+
+# ── 2. choose the vertical gap between the layers -----------------------
+z_layout <- 10      # ForceAtlas layer
+z_spat   <- 5     # spatial layer (any numeric value)
+z_exp   <- 0
+
+# ── 3. convert igraph edges to a data frame (or use your own) -----------
+edges <- f_edges %>% filter(weight>20)
+
+# ── 3. helper that returns a list of plotly traces ---------
+library(viridisLite)   # nice perceptual palette
+library(scales)        # col_numeric()
+
+weight_pal <- col_numeric(
+  viridis(256, option = "D"),           # or any palette you like
+  domain = range(edges$weight, na.rm = TRUE)
+)
+
+
+make_edge_traces_layout <- function(edge_tbl, xs, ys, z) {
+  edge_tbl %>%
+    left_join(nodes %>% select(id, x0 = {{ xs }}, y0 = {{ ys }}),
+              by = c("from" = "id")) %>%
+    left_join(nodes %>% select(id, x1 = {{ xs }}, y1 = {{ ys }}),
+              by = c("to"   = "id")) %>%
+    mutate(col = weight_pal(weight)) %>%           # map colour here
+    pmap(function(x0, y0, x1, y1, col, ...) {
+      list(
+        x = c(x0, x1), y = c(y0, y1), z = c(z, z),
+        type  = "scatter3d", mode = "lines",
+        line  = list(width = 2, color = col),      # <- coloured by weight
+        showlegend = FALSE
+      )
+    })
+}
+
+edge_traces_layout <- make_edge_traces_layout(edges, x_layout, y_layout, z_layout)
+edge_traces_spat   <- make_edge_traces_layout(edges, x_spat,   y_spat,   z_spat)
+
+
+library(dplyr)
+library(purrr)
+library(RColorBrewer)   # Set2 palette
+
+region_levels <- sort(unique(nodes$region))
+pal <- setNames(
+  brewer.pal(max(3, length(region_levels)), "Set2")[seq_along(region_levels)],
+  region_levels
+)
+
+connector_traces <- nodes %>%
+  pmap(function(id, x_layout, y_layout, x_spat, y_spat, region, ...) {
+    list(
+      x = c(x_layout, x_spat),
+      y = c(y_layout, y_spat),
+      z = c(z_layout,  z_spat),
+      type  = "scatter3d",
+      mode  = "lines",
+      line  = list(width = 2,
+                   color = pal[[region]]),   # <- use the palette here
+      hovertext = id,                        # optional: tool-tip
+      showlegend = FALSE
+    )
+  })
+
+# ── 5. build the final plotly figure -----------------------
+p <- plot_ly() %>%
+
+  # ForceAtlas-2 nodes
+  add_trace(
+    data = nodes,
+    x = ~x_layout, 
+    y = ~y_layout, 
+    z = z_layout,
+    size = ~degree,
+    type = "scatter3d", mode = "markers",
+    marker = list(color = "tomato"),
+    name   = "ForceAtlas2 layout"
+  ) %>%
+
+  # spatial-coordinate nodes
+  add_trace(
+    data = nodes,
+    x = ~x_spat, 
+    y = ~y_spat, 
+    z = z_spat,
+    color = ~region,
+    colors = "Set2",
+    type = "scatter3d", mode = "markers",
+    marker = list(size = 4),
+    name   = "Spatial layer"
+  ) %>% 
+  # Expression layer
+  add_trace(
+    data = expression,
+    x = ~x, 
+    y = ~y, 
+    z = z_exp,
+    color = ~value,
+    colors = "inferno",
+    type = "scatter3d", mode = "markers",
+    marker = list(size = 4),
+    name   = "Expression layer"
+  )
+
+# add edges and connectors
+#all_traces <- c(edge_traces_layout, edge_traces_spat, connector_traces)
+all_traces <- c(edge_traces_layout)#, connector_traces)
+for (tr in all_traces) {
+  p <- exec(add_trace, p, !!!tr)   # splice ‘tr’ into add_trace()
+}
+
+p <- p %>%
+  layout(
+    scene = list(
+      xaxis = list(
+        title          = "",      # no axis title
+        showticklabels = FALSE,   # <- hides the numbers & tick text
+        showgrid       = TRUE,   # optional: kill the grey grid
+        zeroline       = TRUE    # optional: hide the axis line itself
+      ),
+      yaxis = list(
+        title          = "",
+        showticklabels = FALSE,
+        showgrid       = TRUE,
+        zeroline       = TRUE
+      ),
+      zaxis = list(
+        title          = "",
+        showticklabels = FALSE,
+        showgrid       = TRUE,
+        zeroline       = TRUE
+      )
+    )
+  )
+
+
+
+p %>%
+  layout(
+    scene = list(
+      xaxis = list(title = ""),
+      yaxis = list(title = ""),
+      zaxis = list(title = "")
+    )
+  )
+
+
+```
+
+
+```{r}
+## Add MEA Grid
+nodes <- object@spatial[[1]]$graph$nodes
+edges <- object@spatial[[1]]$graph$edges
+
+unique(nodes$drug)
+
+
+## Filter condition:
+f_nodes = nodes %>% filter(drug=="5uMgabazine")
+f_edges = edges %>% filter(drug=="5uMgabazine")
+
+
+## Test 
+plotSurface(object, color_by="wnk_spak_genes", smooth=F, pt_alpha=0)
+
+plotSurface(object, color_by="wnk_spak_genes", smooth=F, display_image=T)+
+  ggnewscale::new_scale_color()+
+  geom_point(data = f_nodes, mapping = aes(x=x, y=y, fill=region),alpha=0.5, size=4,shape=21, color="white")
+
+
+## Create Layout 
+g = graph_from_data_frame(d=f_edges %>% select(from, to, weight))
+coords_out <- layout.forceatlas2(
+  g,
+  iterations   = 300,   
+  linlog       = TRUE, 
+  gravity      = 5,
+  scalingratio = 10,
+  plotlabels=F
+)
+
+## Graph visualisation in 3D : 
+coords_out <- coords_out %>% as.data.frame() %>% rownames_to_column("id")
+f_nodes <- left_join(f_nodes, coords_out, by="id")
+f_edges <- cbind(f_edges, 
+                 cbind(
+                   left_join(data.frame(id=f_edges$from), coords_out) %>% select(V1, V2) %>% rename(x_coords_from = V1, y_coords_from = V2),
+                   left_join(data.frame(id=f_edges$to), coords_out) %>% select(V1, V2) %>% rename(x_coords_to = V1, y_coords_to = V2)
+                   )
+                 )
+
+## Plot Inputs
+force_coords   <- data.frame(id = coords_out$id, x_layout = coords_out$V1, y_layout = coords_out$V2)
+spatial_coords <- data.frame(id = f_nodes$id, x_spat   = f_nodes$x, y_spat   = f_nodes$y)
+expression <- joinWithGeneSets(object, gene_sets = "wnk_spak_genes") %>% select(x,y,wnk_spak_genes)
+names(expression)[3] <- "value"
+
+## Test layout
+ggplot()+
+  geom_point(data = f_nodes, mapping=aes(x=V1,y=V2, fill=region), size=2,shape=21, color="black")+
+  geom_segment(data = f_edges %>% filter(weight>10), 
+               mapping=aes(x=x_coords_from,y=y_coords_from,xend=x_coords_to,yend=y_coords_to, color =weight, alpha=weight, size=weight))+ 
+  scale_size(range=c(0.1,1))+
+  scale_color_viridis_c(option="B", 
+                        #limits=c(0.3, 0.7), 
+                        oob=scales::squish)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"), 
+          axis.text.y = element_text(colour="black"))
+
+
+```
+
+

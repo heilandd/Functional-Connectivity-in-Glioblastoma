@@ -1,0 +1,335 @@
+<!--
+NOTE (repository version):
+- Personal identifiers and machine-specific absolute paths have been removed.
+- Please set `PROJECT_ROOT` / input paths to point to your local data folder (e.g., `data/`).
+-->
+
+---
+title: "S24_06_CT_03"
+output: html_document
+date: "2025-01-28"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+reticulate::use_condaenv("c2l")
+library(patchwork)
+library(tidyverse)
+library(SPATA2)
+source("~/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/R_scripts/Synaptic.R")
+```
+
+#loading the object and checking the image
+```{r}
+## Samples
+root_SPATA = "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/data/proc"
+root_MEA = "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/UKA_MEA/"
+meta = data.frame(samples = dir(root_SPATA, ".RDS", full.names = T) %>% 
+             str_remove(., "sub") %>% 
+             unique() %>% 
+             str_remove(.,paste0(root_SPATA, "/object_")) %>% 
+             str_remove(., ".RDS"), 
+           spata_obj = dir(root_SPATA, ".RDS", full.names = T) %>% str_remove(., "sub") %>% unique()
+           ) %>% 
+  mutate(mea_data = paste0(root_MEA, str_remove(.$samples, "S")))
+meta$mea_files = map(meta$mea_data, ~.x %>% dir)
+root_out = "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/Analysis_DHH"
+
+saveRDS(meta, "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/Analysis_DHH/Meta.RDS")
+```
+
+## Load and process input data 
+```{r}
+library(readxl)
+i=3
+object = readRDS(meta$spata_obj[i])
+
+
+## Re process Mea Data
+mea_exp= getMeaNames(object)
+mea <- 
+  map(1:length(meta$mea_files[i][[1]]), ~readMeaEdges(getMeaData(object, getMeaNames(object)[.x]), 
+             paste0(meta$mea_data[i],"/",meta$mea_files[i][[1]][.x]),
+             var_from = "source_node",
+             var_to="target_node",
+             var_weight="weight",
+             sheet = "Edges"))
+mea <- 
+  map(1:length(mea), ~readMeaNodes(mea[[.x]], 
+             paste0(meta$mea_data[i],"/",meta$mea_files[i][[1]][.x]),
+             var_id = "node_id",
+             sheet = "Nodes"))
+
+object@data_add$mea <- NULL
+object@data_add$mea <- mea
+names(object@data_add$mea) = map(object@data_add$mea , ~.x@name) %>% unlist()
+
+
+
+
+## Load edge and node information
+## Node files
+nodes = map_dfr(getMeaNames(object), ~getMeaNodes(object, complete = T, mea_name=.x))
+edges = map_dfr(1:length(getMeaNames(object)), .f=function(.x){
+  edges = getMeaEdges(object, mea_name=getMeaNames(object)[.x])
+  #add weight
+  raw_edges <- read_excel(paste0(meta$mea_data[i],"/",meta$mea_files[i][[1]][.x]) , sheet = "Edges")
+  nrow(edges)==nrow(raw_edges)
+  edges$weight = raw_edges$weight
+  return(edges)
+  })
+
+## Plot MEA Data ::
+library(ggnewscale)
+edges %>% 
+  filter(drug == drug) %>% 
+  pull(weight) %>% density() %>% plot()
+
+p=plotImage(object)#ggpLayerMeaOutline(object)
+lim=list(x=range(nodes$x),y=range(nodes$y))
+
+drug_select = c(edges$drug %>% unique())[1]
+weight_lim = 500
+
+n_inp = nodes[!is.na(nodes$drug), ] %>% filter(.$drug == drug_select)
+e_inp = edges %>% filter(.$drug==drug_select) %>% filter(weight>weight_lim)
+p+
+  geom_point(data = n_inp, mapping=aes(x=x,y=y, color = degree , alpha=degree), size=2)+
+  xlim(lim$x[1]-20, lim$x[2]+20)+
+  ylim(lim$y[1]-20, lim$y[2]+20)+
+  scale_color_viridis_c(option="D")+
+  ggnewscale::new_scale_color() +
+  geom_segment(data = e_inp, 
+               mapping=aes(x=x,y=y,xend=xend,yend=yend, color =weight, alpha=weight, size=weight))+ 
+  scale_size(range=c(0.1,1))+
+  scale_color_viridis_c(option="B")
+
+
+## Plot Spatial transcroptomics
+object %>% plotSurface(color="GFAP", alpha_by="GFAP")+
+  scale_color_gradientn(colors=colorRampPalette(RColorBrewer::brewer.pal(9, "Reds") )(50) )+
+  ggnewscale::new_scale_color() +
+  geom_point(data = n_inp, mapping=aes(x=x,y=y, color = degree , alpha=degree), size=2)+
+  xlim(lim$x[1]-60, lim$x[2]+60)+
+  ylim(lim$y[1]-60, lim$y[2]+60)+
+  scale_color_viridis_c(option="D")+
+  ggnewscale::new_scale_color() +
+  geom_segment(data = e_inp, 
+               mapping=aes(x=x,y=y,xend=xend,yend=yend, color =weight, alpha=weight, size=weight))+ 
+  scale_size(range=c(0.1,1))+
+  scale_color_viridis_c(option="B")
+
+
+```
+
+#Export files for postprocessing
+```{r}
+reticulate::use_condaenv("c2l")
+library(readxl)
+library(patchwork)
+library(tidyverse)
+library(SPATA2)
+
+
+
+
+root_out = "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/Analysis_DHH"
+root_SPATA = "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/data/proc"
+root_MEA = "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/UKA_MEA/"
+meta <- readRDS("<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/Analysis_DHH/Meta.RDS")
+
+#Images and Expression matrix 
+for(i in 1:nrow(meta)){
+    object = readRDS(meta$spata_obj[i])
+    counts = SPATA2::getCountMatrix(object)
+    coords = SPATA2::getCoordsDf(object)
+    image = map(SPATA2::getImageNames(object),~SPATA2::getImage(object, img_name=.x))
+    names(image) = SPATA2::getImageNames(object)
+    obs = getFeatureDf(object)
+    saveRDS(list(counts = counts, coords = coords, image=image, obs=obs), paste0(root_out, "/", meta$samples[i], ".RDS"))
+}
+## Nodes and Edges:
+for(i in 1:nrow(meta)){
+  print(i)
+    object = readRDS(meta$spata_obj[i])
+    nodes = map_dfr(getMeaNames(object), ~getMeaNodes(object, complete = T, mea_name=.x))
+    edges = map_dfr(1:length(getMeaNames(object)), .f=function(.x){
+  edges = getMeaEdges(object, mea_name=getMeaNames(object)[.x])
+  #add weight
+  raw_edges <- read_excel(paste0(meta$mea_data[i],"/",meta$mea_files[i][[1]][.x]) , sheet = "Edges")
+  nrow(edges)==nrow(raw_edges)
+  edges$weight = raw_edges$weight
+  return(edges)
+  })
+
+    saveRDS(list(nodes = nodes, edges = edges), paste0(root_out, "/", meta$samples[i], "graph_files.RDS"))
+}
+
+## Return Anndata
+for(i in 1:nrow(meta)){
+  print(i)
+  object = readRDS(meta$spata_obj[i])
+  library(SingleCellExperiment)
+  sc <- reticulate::import("scanpy")
+  np <- reticulate::import("numpy")
+  pd <- reticulate::import("pandas")
+  library(anndata)
+  bc <- getBarcodes(object)
+  sce <- 
+    Seurat::CreateSeuratObject(counts=SPATA2::getCountMatrix(object)) %>% 
+    Seurat::as.SingleCellExperiment()
+  exprs <- assay(sce, "counts")
+  col_data <- as.data.frame(colData(sce))
+  row_data <- as.data.frame(rowData(sce))
+  ## Create AnnData
+  adata <- AnnData(X = t(exprs), obs = col_data, var = row_data)
+  adata$obsm[["spatial"]] <- getCoordsDf(object)[,c("x", "y")] %>% as.matrix()
+  anndata::write_h5ad(adata, filename = paste0(root_out, "/", meta$samples[i], "_adata.h5ad"))
+
+}
+
+## C2L
+infer_csv <- "<USER_HOME>/Library/CloudStorage/<CONTACT_EMAIL>/Meine Ablage/Data/Reference_files/inf_aver_GBMapNeuron.csv"
+for(i in 1:nrow(meta)){
+  print(i)
+  adata = anndata::read_h5ad(paste0(meta$samples[i], "_adata.h5ad"))
+  object = readRDS(meta$spata_obj[i])
+  output <- paste0(root_out, "/", meta$samples[i] ,"_deconv.csv")
+  library(reticulate)
+  source_python("~/Desktop/ElectroGenomics/ElectroGenomics_Rproject/Functions_py.py")
+  cell_types <- read.csv(output)
+  names(cell_types)[1] <- "barcodes"
+  cell_types_df <- cell_types
+  names(cell_types_df) <- str_remove(names(cell_types_df), "q05cell_abundance_w_sf_")
+  names(cell_types_df) <- names(cell_types_df) %>% str_replace_all(., "[.]", "_")
+  object <- object %>% SPATA2::addFeatures(cell_types_df, overwrite = T)
+  saveRDS(object, meta$spata_obj[i])
+  
+} 
+
+returnCytoSpace <- function(object, Reference_Annotation, CS_folder, Ref_mat, Ref_lables, scale=30){
+  
+  counts_st <- SPATA2::getCountMatrix(object) %>% as.data.frame() %>% rownames_to_column("V1")
+  coords <- SPATA2::getCoordsDf(object) %>% dplyr::select(barcodes, row, col) %>% dplyr::rename("SpotID":=barcodes)
+  
+  #Tissue Fraction
+  df <- SPATA2::getFeatureDf(object)
+  
+  if(any(c(Reference_Annotation %in% names(df))==F)) stop("Need to run cell2location with new data")
+  
+  tissue_fraction <- df %>% dplyr::select({{Reference_Annotation}}) %>% colSums() %>% as.data.frame()
+  names(tissue_fraction) <- c("Fraction")
+  tissue_fraction <- tissue_fraction %>% rownames_to_column("Index")
+  
+  total <- sum(tissue_fraction$Fraction)
+  tissue_fraction$Fraction <- tissue_fraction$Fraction/total
+  tissue_fraction <- t(tissue_fraction)
+  
+  ## Align Tissue fraction with ref
+  ref_lab <- read.csv(Ref_lables, sep="\t")$CellType %>% unique()
+  to_remove <- which(c(tissue_fraction[1,] %in% ref_lab)==F)
+  
+  tissue_fraction <- tissue_fraction[,-to_remove]
+  
+  #Create a folder for the data
+  #sample <- SPATA2::getSampleName(object)
+  sample_dir <- CS_folder
+  if(dir.exists(sample_dir)==F){dir.create(sample_dir)}
+  
+  #output files
+  write.table(counts_st, file=paste0(sample_dir, "/counts.txt"), row.names=F, sep="\t", quote=F)
+  write.table(coords, file=paste0(sample_dir, "/coords.txt"), row.names=F, sep="\t", quote=F)
+  write.table(tissue_fraction, file=paste0(sample_dir, "/Cell_Fraction.txt"), row.names=T,col.names = F, sep="\t", quote=F)
+  
+  
+  #create the conda run script
+  
+  
+  run <- paste0("conda run -n cytospace cytospace --scRNA-path '" , Ref_mat, 
+                "' --cell-type-path '", Ref_lables,
+                "' --st-path '", paste0(sample_dir, "/counts.txt"), 
+                "' --coordinates-path '", paste0(sample_dir, "/coords.txt"), 
+                "' -o '", sample_dir,
+                "' --cell-type-fraction-estimation-path '", paste0(sample_dir, "/Cell_Fraction.txt"), "' --solver-method 'lapjv_compat'" )
+  
+  
+  string.start <- " #!/usr/bin/env bash -l \n \n \n "
+  run.code <- paste0(run, " \n ")
+  string.out <- base::paste0(string.start,"\n", paste0(run.code, collapse = "\n"), "\n \n print(\"Done\") \n \n")
+  base::writeLines(string.out, paste0(CS_folder, "/cytoSpace.sh"))
+}
+colors <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBM_Neuron_colors.RDS")
+colors$annotation_level_4_new <- 
+  colors$annotation_level_4 %>% 
+  str_replace_all(., "-", "_") %>% 
+  str_replace_all(., " ", "_") %>% 
+  str_replace_all(., "/", "_")
+
+## Cytospace
+library(data.table)
+for(i in 1:nrow(meta)){
+  print(i)
+  object = readRDS(meta$spata_obj[i])
+  sample_ID <- meta$samples[i]
+  message(paste0("Run sample: ",sample_ID))
+  
+  Reference_Annotation <- colors$annotation_level_4_new
+  CS_folder <- paste0(root_out,"/CytoSpace/", sample_ID)
+  Ref_mat = "<USER_HOME>/Desktop/RecurrentGBM/CytoSpace/Ref/scRNA_data.txt"
+  Ref_lables = "<USER_HOME>/Desktop/RecurrentGBM/CytoSpace/Ref/cell_type_labels.txt"
+  returnCytoSpace(object, Reference_Annotation, CS_folder, Ref_mat, Ref_lables)
+  
+} 
+
+## Import Cytospace
+importCytoSpace <- function(object, Reference_Annotation, CS_folder, Ref_mat, Ref_lables, scale=30){
+  
+  message(paste0(Sys.time(), "--- Create single cell SPATA2 object -----"))
+  sc_loc <- read.csv(paste0(CS_folder,"/assigned_locations.csv")) %>% mutate(barcodes = SpotID) %>% select(-SpotID)
+  
+  ## Add x and y
+  sc_loc <- left_join(sc_loc, SPATA2::getCoordsDf(object) %>% select(barcodes, x, y))
+  
+  
+  # jitter position
+  sc_loc <- sc_loc %>% left_join(., sc_loc %>% group_by(barcodes) %>% count())
+  #scale=30
+  sc_loc <- map_dfr(.x=sc_loc$barcodes %>% unique(), .f=function(.x){
+    a <- sc_loc %>% filter(barcodes==.x)
+    if(a$n[1]==1){a$x_sc=a$x; a$y_sc=a$y}else{
+      a$x_sc <- runif(nrow(a), unique(a$x)-0.6*scale, unique(a$x)+0.6*scale) %>% sample()
+      a$y_sc <- runif(nrow(a), unique(a$y)-0.6*scale, unique(a$y)+0.6*scale) %>% sample()
+    }
+    return(a)
+  }, .progress=T)
+  
+  #object@data_add$cytospace = sc_loc
+  
+  
+  return(sc_loc)
+}
+for(i in 1:nrow(meta)){
+  print(i)
+  object = readRDS(meta$spata_obj[i])
+  sample_ID <- meta$samples[i]
+  message(paste0("Run sample: ",sample_ID))
+  
+  Reference_Annotation <- colors$annotation_level_4_new
+  CS_folder <- paste0(root_out,"/CytoSpace/", sample_ID)
+  Ref_mat = "<USER_HOME>/Desktop/RecurrentGBM/CytoSpace/Ref/scRNA_data.txt"
+  Ref_lables = "<USER_HOME>/Desktop/RecurrentGBM/CytoSpace/Ref/cell_type_labels.txt"
+  
+  cytospace = importCytoSpace(object, Reference_Annotation, CS_folder, Ref_mat, Ref_lables)
+  saveRDS(cytospace, paste0(root_out, "/", meta$samples[i], "_cytospace.RDS"))
+} 
+
+## update meta data:
+
+meta$cytospace = paste0(root_out, "/", meta$samples, "_cytospace.RDS")
+meta$adata = paste0(root_out, "/", meta$samples, "_adata.h5ad")
+meta$raw_data <- paste0(root_out, "/", meta$samples, ".RDS")
+meta$graph <- paste0(root_out, "/", meta$samples, "graph_files.RDS")
+
+```
+

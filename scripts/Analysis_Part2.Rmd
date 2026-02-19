@@ -1,0 +1,2358 @@
+<!--
+NOTE (repository version):
+- Personal identifiers and machine-specific absolute paths have been removed.
+- Please set `PROJECT_ROOT` / input paths to point to your local data folder (e.g., `data/`).
+-->
+
+---
+title: "Analysis Microglia"
+author: "<REDACTED>"
+date: "2025-01-26"
+output: html_document
+---
+
+## Create a gene expression model and latent space prediction for deep learning
+
+```{r}
+reticulate::use_condaenv("EcoFoundation")
+library(Seurat)
+library(SPATA2)
+library(tidyverse)
+library(igraph)
+library(reticulate)
+library(ggpubr)
+library(BayesSpace)
+```
+
+## Single cell Data
+```{r}
+ref <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBMap_Neuron.RDS")
+ref$annotation_level_2[is.na(ref$annotation_level_2)] <- "Neurons"
+
+
+ref$annotation_level_4 <- ref$annotation_level_4 %>% 
+  str_replace_all(., "-", "_") %>% 
+  str_replace_all(., " ", "_") %>% 
+  str_replace_all(., "/", "_")
+
+colors <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBM_Neuron_colors.RDS")
+colors$annotation_level_4_new <- 
+  colors$annotation_level_4 %>% 
+  str_replace_all(., "-", "_") %>% 
+  str_replace_all(., " ", "_") %>% 
+  str_replace_all(., "/", "_")
+
+col_new <- colors$colors;names(col_new) <- colors$annotation_level_4_new
+```
+
+
+```{r}
+#NTRK2 BDNF
+col <- colorRampPalette(c("#DDDDDD","#FFFFFF","#FFFFFF", RColorBrewer::brewer.pal(9, "Blues")))
+Seurat::FeaturePlot(ref, features = "EGF", order =T,raster=F, raster.dpi = c(1024, 1024), pt.size = 1)+
+  scale_color_gradientn(colors=col(50), 
+                        limits=c(0,2), 
+                        oob=scales::squish)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+
+
+
+Seurat::FeaturePlot(ref, features = "NTRK2", order =T)+
+  scale_color_gradientn(colors=col(50), 
+                        limits=c(0,2), 
+                        oob=scales::squish)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+
+
+p = Seurat::VlnPlot(ref, features = "BDNF", group.by = "annotation_level_4")+
+  Seurat::NoLegend()
+
+p$data %>% 
+  ggplot(mapping=aes(x=ident, y=BDNF, fill=ident))+
+  #geom_violin()+
+  geom_boxplot(notch = TRUE)+
+  geom_dotplot(binaxis='y',binwidth = 0.000002, stackdir = "center", size=0.1, alpha=0.5)+
+  ylim(0,0.8)+
+  theme_bw() +
+  theme(#plot.margin = margin(1.5,1.5,1.5,1.5, "cm"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black"),
+        axis.text.y = element_text(colour="black"))+
+  Seurat::NoLegend()
+
+
+p = Seurat::DotPlot(ref, features = "BDNF", group.by = "annotation_level_4")+
+  Seurat::NoLegend()
+
+p$data %>% 
+  ggplot(mapping=aes(x=id, y=pct.exp, fill=id))+
+  geom_col()+
+  scale_fill_manual(values = col_new)+
+  scale_x_discrete(limits=colors$annotation_level_4_new)+
+  theme_bw() +
+  theme(#plot.margin = margin(1.5,1.5,1.5,1.5, "cm"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black", angle = 90, hjust=1),
+        axis.text.y = element_text(colour="black"))+
+  Seurat::NoLegend()
+
+
+```
+
+
+
+
+
+
+## Colors
+```{python}
+import matplotlib.pyplot as plt
+cmap = plt.get_cmap('tab20')
+tab20_colors = cmap.colors
+
+# Converting RGB colors to hexadecimal format
+def rgb_to_hex(rgb):
+    return "#{:02x}{:02x}{:02x}".format(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
+
+tab20_hex_colors = [rgb_to_hex(color) for color in tab20_colors]
+tab20_hex_colors
+
+cmap = plt.get_cmap('tab10')
+tab10_colors = cmap.colors
+
+# Converting RGB colors to hexadecimal format
+def rgb_to_hex(rgb):
+    return "#{:02x}{:02x}{:02x}".format(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
+
+tab10_hex_colors = [rgb_to_hex(color) for color in tab20_colors]
+tab10_hex_colors
+```
+
+
+## Focus omy myeloid cells in GBM:
+```{r}
+
+DimPlot(ref, group.by = "annotation_level_4", label=T)+
+  scale_color_manual(values = col_new)+
+  coord_equal()+
+  Seurat::NoLegend()
+
+
+myeloid = colors$annotation_level_4_new[str_detect(colors$annotation_level_4, "TAM")]
+
+s_m = subset(ref, cells = ref[[]] %>% filter(annotation_level_4 %in% myeloid) %>% rownames())
+
+DimPlot(s_m, group.by = "annotation_level_4", label=T, pt.size=1)+
+  scale_color_manual(values = py$tab10_hex_colors)+
+  coord_equal()+
+  Seurat::NoLegend()
+
+```
+
+
+## Diff gene expression
+```{r}
+
+## Remove non Protein encoding genes:
+
+library(biomaRt)
+mart <- biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl") 
+protein_coding_genes <- biomaRt::getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "gene_biotype"),
+  filters = "biotype",
+  values = "protein_coding",
+  mart = mart
+)
+
+protein_coding_symbols <- 
+  protein_coding_genes$hgnc_symbol %>% 
+  unique()
+protein_coding_symbols <- protein_coding_symbols[!protein_coding_symbols==""]
+
+protein_coding_symbols <- intersect(rownames(s_m), protein_coding_symbols)
+length(protein_coding_symbols)
+
+s_m <- s_m %>% subset(features=protein_coding_symbols)
+s_m@active.assay="RNA"
+
+s_m <- 
+  s_m %>% 
+  FindVariableFeatures() %>% 
+  Seurat::NormalizeData() %>% 
+  Seurat::ScaleData() %>% 
+  Seurat::RunPCA() %>% 
+  Seurat::RunUMAP(dims=1:30)
+
+DimPlot(s_m, group.by = "annotation_level_4", label=T, pt.size=1)+
+  scale_color_manual(values = py$tab10_hex_colors)+
+  coord_equal()+
+  Seurat::NoLegend()
+
+s_m <- harmony::RunHarmony(s_m, group.by.vars=c("donor_id", "assay"))
+s_m <- Seurat::RunUMAP(s_m, reduction= "harmony", dims=1:50)
+
+s_m <- 
+  s_m %>% 
+  Seurat::FindNeighbors(reduction= "harmony", dims=1:30) %>% 
+  Seurat::FindClusters(resolution = 0.4)
+
+p1=DimPlot(s_m, group.by = "seurat_clusters", label=T, pt.size=1, reduction = "umap")+
+  scale_color_manual(values = py$tab20_hex_colors)+
+  coord_equal()+
+  Seurat::NoLegend()
+p1
+
+
+DimPlot(s_m, group.by = "author", label=T, pt.size=1)+
+  scale_color_manual(values = py$tab20_hex_colors)+
+  coord_equal()
+
+p2 = DimPlot(s_m, group.by = "annotation_level_4", label=T, pt.size=1)+
+  scale_color_manual(values = py$tab10_hex_colors %>% sample())+
+  coord_equal()
+
+p1+p2
+
+s_m$donor_id %>% table()
+
+
+FeaturePlot(s_m, "MKI67",  pt.size = 1, order = T)+
+  scale_color_gradientn(colors=viridis::inferno(50))
+FeaturePlot(s_m, "CD68",  pt.size = 1,order = T)+
+  scale_color_gradientn(colors=viridis::inferno(50))
+FeaturePlot(s_m, "AIF1",  pt.size = 1,order = T)+
+  scale_color_gradientn(colors=viridis::inferno(50))
+FeaturePlot(s_m, "CD163",  pt.size = 1,order = T)+
+  scale_color_gradientn(colors=viridis::inferno(50))
+FeaturePlot(s_m, "TMEM119",  pt.size = 1, order = T)+
+  scale_color_gradientn(colors=viridis::inferno(50))
+FeaturePlot(s_m, "SPP1",  pt.size = 1, order = T)+
+  scale_color_gradientn(colors=viridis::inferno(50))
+FeaturePlot(s_m, "TREM2",  pt.size = 1,order = T)+
+  scale_color_gradientn(colors=viridis::inferno(50))
+
+
+s_m[[]] %>%
+  as.data.frame() %>%
+  group_by(seurat_clusters, annotation_level_4) %>%
+  dplyr::count() %>%
+  group_by(seurat_clusters) %>%
+  mutate(relative_count = n / sum(n)) %>%  # Calculate relative counts
+  ggplot() +
+  geom_tile(mapping = aes(x = seurat_clusters, y = annotation_level_4, fill = relative_count)) +
+  scale_fill_gradientn(colors = viridis::inferno(50), limits = c(0, 0.8), oob = scales::squish, na.value = "black") +
+  labs(
+    x = "Seurat Clusters",
+    y = "Annotation Level 4",
+    fill = "Relative Count"
+  ) +
+  theme_minimal()
+
+## 
+
+anno = data.frame(seurat_clusters=factor(0:13), 
+           anno=c("Microglia_proinflammatory",
+                  "Microglia_proinflammatory2",
+                  "Macrophages_MHC",
+                  "remove",
+                  "Macrophages_Hypoxia",
+                  "remove",
+                  "Microglia_Aging",
+                  "Macrophages_MHC",
+                  "Macrophages_immunesupressive",
+                  "remove",
+                  "Macrophages_INF",
+                  "Macrophages_inflammatory",
+                  "remove",
+                  "Microglia_Cycling"))
+
+s_m$anno_new <- s_m[[]] %>% 
+  data.frame() %>% 
+  dplyr::select(seurat_clusters) %>% 
+  left_join(., anno, by="seurat_clusters") %>% 
+  pull(anno)
+
+s_m <- s_m %>% subset(cells=s_m[[]] %>% data.frame() %>% filter(anno_new!="remove") %>% rownames())
+
+
+DimPlot(s_m, group.by = "anno_new", label=T, pt.size=1)+
+  scale_color_manual(values = py$tab10_hex_colors %>% sample())+
+  coord_equal()
+
+ls <- s_m@reductions$harmony@cell.embeddings
+c=c(s_m$anno_new %>% as.factor() %>% as.numeric())-1
+
+```
+
+
+## Create nice embedding:
+```{python}
+## get UMAP of the latent space:
+import numpy as np
+import umap
+
+def runSUMAP(data, target, training_rate=0.8, filename="fitter.sav"):
+  #target = r.numeric_labels
+  target = np.asarray(target)
+  masked_target = target.copy().astype(np.int8)
+  masked_target[np.random.choice(len(target), size=int(len(target)*training_rate), replace=False)] = -1
+  print("Run UMAP Fit")
+  fitter = umap.UMAP().fit(data, y=masked_target)
+  embedding = fitter.embedding_
+  return(embedding)
+
+
+embedding = runSUMAP(r.ls, r.c, training_rate=0.4)
+
+```
+
+```{r}
+
+emb = py$embedding
+rownames(emb) <- rownames(ls)
+colnames(emb) <- paste0("umap_", 1:2)
+
+s_m@reductions$umaplerarn <- Seurat::CreateDimReducObject(
+  embeddings = emb,
+  key = "umaplerarn_",
+  assay = "RNA"
+)
+
+color_MG <-  py$tab10_hex_colors %>% sample()
+
+s_m@misc$color_MG <- color_MG
+
+DimPlot(s_m, group.by = "anno_new", label=T, pt.size=5, reduction = "umaplerarn", raster = T, raster.dpi = c(1024, 1024))+
+  scale_color_manual(values = color_MG)
+```
+
+
+```{r}
+
+Seurat::DotPlot(s_m, features = "P2RY12", group.by = "anno_new")
+
+
+levels <- c("Microglia_proinflammatory", "Microglia_proinflammatory2", "Microglia_Aging", "Microglia_Cycling",
+                            "Macrophages_MHC","Macrophages_INF", "Macrophages_inflammatory", "Macrophages_immunesupressive",
+                            "Macrophages_Hypoxia")
+
+
+s_m$anno_new <- factor(s_m$anno_new, levels = c("Microglia_proinflammatory", "Microglia_proinflammatory2", "Microglia_Aging", "Microglia_Cycling",
+                            "Macrophages_MHC","Macrophages_INF", "Macrophages_inflammatory", "Macrophages_immunesupressive",
+                            "Macrophages_Hypoxia"))
+
+c("TMEM119","P2RY12", "CX3CR1", "TREM2", "CSF1R", "HEXBP","SPP1",
+                                  "C1QA", "C1QB", "C1QC","DNAI3", "CHRNA9","CD207","FCER1A", "CXCL2",
+                                  "SELENOP","RNASE1", "GPR42", "PCDHGC3","SPARC", "EGFR",
+                                  "VCAN", "BNIP3", "VIM")
+
+top_marker <- 
+  marker_genes %>% 
+  group_by(cluster) %>% 
+  top_n(n=6, wt=avg_log2FC) %>% 
+  select(cluster, gene) %>% 
+  left_join(data.frame(cluster=levels), ., by="cluster")
+
+Seurat::DotPlot(s_m, features = "" , group.by = "anno_new")+
+  scale_color_gradientn(colors=viridis::inferno(50))+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+  
+p$data %>% 
+  ggplot()+
+  geom_tile(mapping=aes(x=id, y=features.plot, fill=avg.exp.scaled), shape=21)+
+  scale_fill_gradientn(colors=viridis::inferno(50))+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+
+
+p=Seurat::DotPlot(s_m, features = c("TMEM119","P2RY12", "CX3CR1", "TREM2", "CSF1R") , group.by = "anno_new")+
+  scale_color_gradientn(colors=viridis::inferno(50))+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+  
+p$data %>% 
+  ggplot()+
+  geom_tile(mapping=aes(x=id, y=features.plot, fill=avg.exp.scaled), shape=21)+
+  scale_fill_gradientn(colors=viridis::inferno(50), 
+                       limits=c(0.3,1), oob=scales::squish)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+
+
+pruning = c("ADGRB3", "C1QA", "C1QL1", "C3", "CD47", "CX3CR1", "EPHA4", "ITGB1", "KCNK13", "NGEF", "PLXNC1", "SARM1", "TREM2", "VANGL2")
+
+deconv <- readRDS(meta$deconvolution[1])
+phago <- deconv$object@used_genesets %>% filter(ont=="BP.GO_POSITIVE_REGULATION_OF_PHAGOCYTOSIS") %>% pull(gene)
+phago <- deconv$object@used_genesets %>% filter(ont=="HM_TNFA_SIGNALING_VIA_NFKB") %>% pull(gene)
+
+SPATA2::getGeneSets(deconv$object, index="TNF")
+
+
+p=Seurat::DotPlot(s_m, features =  phago, group.by = "anno_new")+
+  scale_color_gradientn(colors=viridis::inferno(50))+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+  
+p$data %>% 
+  ggplot()+
+  geom_tile(mapping=aes(x=id, y=features.plot, fill=avg.exp.scaled), shape=21)+
+  scale_fill_gradientn(colors=viridis::inferno(50), 
+                       limits=c(0.3,1), oob=scales::squish)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+
+p$data %>% 
+  ggplot()+
+  geom_tile(mapping=aes(x=id, y=features.plot, fill=avg.exp.scaled), shape=21)+
+  scale_fill_gradientn(colors=viridis::inferno(50), 
+                       limits=c(0.3,1), oob=scales::squish)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+  
+
+
+p$data %>% 
+  group_by(id) %>% 
+  summarize(avg.exp.scaled = mean(avg.exp.scaled, na.rm=T)) %>% 
+  ggplot()+
+  geom_col(mapping=aes(x=id, y=avg.exp.scaled))+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+
+
+FeaturePlot(s_m, "P2RY12",  pt.size = 1,order = T, reduction = "umaplerarn")+
+  scale_color_gradientn(colors=viridis::inferno(50))
+
+
+
+```
+
+
+
+
+
+
+## Diff gene expression
+```{r}
+Seurat::Idents(s_m) = s_m$annotation_level_4
+Seurat::Idents(s_m) = s_m$anno_new
+
+
+marker_genes <- Seurat::FindAllMarkers(s_m)
+top10 = marker_genes %>% group_by(cluster) %>% top_n(n=50, wt=avg_log2FC)
+
+Seurat::DotPlot(s_m, features=top10$gene)
+
+
+Seurat::DoHeatmap(s_m, features=top10$gene, slot = "data")
+Seurat::DoHeatmap(s_m, features=top10$gene)
+```
+
+## Gene set enrichment
+```{r}
+
+top10 = marker_genes %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC)
+
+list_genes <- map(.x=unique(top10$cluster) %>% as.character(), .f=function(i){
+
+  top10 %>% filter(cluster==i) %>% pull(gene)
+
+})
+
+all <- unlist(list_genes)
+names(list_genes) <- unique(top10$cluster) %>% as.character()
+
+list_genes <- list_genes[c("Microglia_proinflammatory", "Microglia_proinflammatory2", "Microglia_Aging", "Microglia_Cycling",
+                            "Macrophages_MHC","Macrophages_INF", "Macrophages_inflammatory", "Macrophages_immunesupressive",
+                            "Macrophages_Hypoxia")]
+
+
+
+library(DOSE)
+library(enrichplot)
+library(clusterProfiler)
+
+# Run the Gene Ontology Analysis of the different clusters
+CC <- compareCluster(list_genes, 
+                     fun="enrichGO",
+                     ont ="all", 
+                     keyType = "SYMBOL", 
+                     OrgDb = "org.Hs.eg.db")
+edo <- pairwise_termsim(CC)
+
+## Plot the comparison
+col <- colorRampPalette(c(RColorBrewer::brewer.pal(9, "Greens"))[4:9])
+
+enrichplot::dotplot(edo, showCategory=4)+
+  scale_color_gradientn(colours = col(50), name="")+
+  guides(color = guide_colourbar(barwidth = 0.3, barheight = 8, 
+                                 ticks =F, frame.colour="black"), label=F, size="none")+
+  ggtitle("Gene Ontology")+
+  xlab("")+ylab("")+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+
+
+## Get a Network representation of the enriched pathways in all cluster
+
+#Set the random start point to get allways the same plots
+set.seed(200)
+plot <- 
+  emapplot(edo, showCategory=50, cex_category=0.01, 
+           pie.params = list(pie = "equal"), 
+           cex_line = 0.3,
+           layout="graphopt", min_edge=0.15, repel=T)
+
+
+
+res_map <- 
+  edo@compareClusterResult %>% 
+  filter(Description %in% plot$data$name) %>% 
+  group_by(Description, Cluster) %>% 
+  summarise(p = mean(p.adjust)) %>% 
+  ungroup() 
+
+anno <- data.frame(name=unique(res_map$Description), type=map(.x=unique(res_map$Description), .f=function(i){
+  c <- res_map %>% filter(Description==i) %>% pull(Cluster)
+  return(c[res_map %>% filter(Description==i) %>% pull(p) %>% which.min()] %>% as.character())
+  }) %>% unlist())
+
+library(ggrepel)
+plot$data <- plot$data %>% left_join(., anno, by="name")
+
+col.test <- gplots::col2hex(unique(plot$data$type))
+names(col.test) <- unique(plot$data$type)
+
+ggplot(data=plot$data)+
+  plot$layers[[1]]+
+  geom_point(mapping = aes(x=x, y=y, fill=type, size=size), colour="black",pch=21)+
+  scale_fill_manual(values=col.test)+
+  scale_size(range=c(1, 2))+
+  theme_bw() +
+  guides(size="none")+
+  xlab("Dim 1")+ylab("Dim 2")+
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black", size=0.5), 
+          axis.text.y = element_text(colour="black", size=0.5))+
+    coord_fixed()+
+  geom_text_repel(mapping= aes(x,y, label=name),
+                  size=2, force=10, force_pull=10, max.overlaps=20,
+                  segment.size=0.1)+
+  ggtitle("GeneSet Enrichment Analysis")
+
+```
+
+
+#### New Annotation of multiple datasets:
+
+```{r}
+reticulate::use_condaenv("c2l")
+
+## Load Packages
+library(Seurat)
+library(SPATA2)
+library(tidyverse)
+library(igraph)
+library(reticulate)
+library(spAnchor)
+library(SPATAwrappers)
+source("<USER_HOME>/Desktop/ElectroGenomics/ElectroGenomics_Rproject/Functions_R.R")
+```
+
+
+## Prams:
+Pat_ID: For patient
+Dat_ID: For Dataset
+Tech_ID: For Technology
+
+
+## Roman Nat Med data:
+```{r}
+library(SeuratDisk)
+s_natMed <- LoadH5Seurat("<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/GSE245311_harmony_integrated_nucseq_all_cells.H5Seurat")
+#s_natMed <- JoinLayers(s_natMed)
+
+s_natMed@meta.data
+DimPlot(s_natMed, group.by = "predicted.id")
+DimPlot(s_natMed, group.by = "timepoint")
+
+## Subset myeloid Cells:
+s_natMed = subset(s_natMed, cells = s_natMed@meta.data %>% 
+                    as.data.frame() %>% 
+                    filter(predicted.id=="Immune") %>% 
+                    rownames()
+                    )
+s_natMed$Pat_ID = s_natMed$Pat_ID
+s_natMed$Dat_ID = "Sank_Dev"
+s_natMed$Tech_ID = "10X"
+
+saveRDS(s_natMed, "<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/Seurat/Sank_NatMed.RDS")
+
+library(SingleCellExperiment)
+sc <- reticulate::import("scanpy")
+np <- reticulate::import("numpy")
+pd <- reticulate::import("pandas")
+bc <- rownames(s_natMed[[]])
+sce <- s_natMed %>% 
+  Seurat::as.SingleCellExperiment()
+exprs <- assay(sce, "counts")
+col_data <- as.data.frame(colData(sce))
+row_data <- as.data.frame(rowData(sce))
+adata = sc$AnnData(X = t(exprs),obs = col_data, var = row_data)
+store = "<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/adata"
+anndata::write_h5ad(adata, paste0(store, "/Sank_NatMed.h5ad"))
+
+```
+
+
+## Roman Nat Neuros Paper:
+
+```{r}
+library(SeuratDisk)
+library(R.utils)
+s_natNeuro_path <- readRDS("<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/microglia.RDS")
+s_natNeuro_path@meta.data
+DimPlot(s_natNeuro_path, group.by = "old.ident")
+
+s_natNeuro_path = subset(s_natNeuro_path, cells = s_natNeuro_path@meta.data %>% 
+                    as.data.frame() %>% 
+                    filter(Celltype=="Micr") %>% 
+                    rownames()
+                    )
+
+s <- s_natNeuro_path
+
+s$Pat_ID = s$old.ident
+s$Dat_ID = "Sank_NatNeu"
+s$Tech_ID = "SMARTseq"
+
+
+saveRDS(s, "<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/Seurat/GBM_Sank.RDS")
+
+
+library(SingleCellExperiment)
+sc <- reticulate::import("scanpy")
+np <- reticulate::import("numpy")
+pd <- reticulate::import("pandas")
+bc <- rownames(s[[]])
+sce <- s %>% 
+  Seurat::as.SingleCellExperiment()
+exprs <- assay(sce, "counts")
+col_data <- as.data.frame(colData(sce))
+row_data <- as.data.frame(rowData(sce))
+adata = sc$AnnData(X = t(exprs),obs = col_data, var = row_data)
+store = "<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/adata"
+anndata::write_h5ad(adata, paste0(store, "/GBM_Sank.h5ad"))
+
+
+```
+
+
+## Antunes scRNA-seq data:
+```{r}
+
+antunes_prim <- Seurat::Read10X("~/Desktop/ElectroGenomics/Data/Microglia/filtered_feature_bc_matrix_HumanNewlyDiagnGBM/filtered_feature_bc_matrix")
+antunes_prim <- Seurat::CreateSeuratObject(antunes_prim)
+
+anno = read.csv("~/Desktop/ElectroGenomics/Data/Microglia/annot_Human_ND_GBM_Full.csv")
+
+
+antunes_prim$celltype = left_join(data.frame(cell = rownames(antunes_prim[[]])), 
+                                  anno) %>% pull(cluster)
+antunes_prim$batch = left_join(data.frame(cell = rownames(antunes_prim[[]])), 
+                                  anno) %>% pull(sample)
+
+
+antunes_rec <- Seurat::Read10X("~/Desktop/ElectroGenomics/Data/Microglia/filtered_feature_bc_matrix_HumanRecurrentGBM/filtered_gene_bc_matrices/GRCh38")
+antunes_rec <- Seurat::CreateSeuratObject(antunes_rec)
+anno = read.csv("~/Desktop/ElectroGenomics/Data/Microglia/annot_Human_R_GBM_Full.csv")
+
+
+antunes_rec$celltype = left_join(data.frame(cell = rownames(antunes_rec[[]])), 
+                                  anno) %>% pull(cluster)
+antunes_rec$batch = left_join(data.frame(cell = rownames(antunes_rec[[]])), 
+                                  anno) %>% pull(sample)
+
+s = merge(antunes_prim, antunes_rec)
+s = JoinLayers(s)
+
+s@meta.data$celltype %>% unique()
+keep = c("TAM 2", "TAM 1","prol. TAM", "Monocytes")
+
+s = subset(s, cells = s@meta.data %>% 
+                    as.data.frame() %>% 
+                    filter(celltype %in% keep) %>% 
+                    rownames()
+                    )
+
+
+
+s$Pat_ID = s$batch
+s$Dat_ID = "antunes"
+s$Tech_ID = "10X"
+saveRDS(s, "<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/Seurat/GBM_Ant.RDS")
+
+
+library(SingleCellExperiment)
+sc <- reticulate::import("scanpy")
+np <- reticulate::import("numpy")
+pd <- reticulate::import("pandas")
+bc <- rownames(s[[]])
+sce <- s %>% 
+  Seurat::as.SingleCellExperiment()
+exprs <- assay(sce, "counts")
+col_data <- as.data.frame(colData(sce))
+row_data <- as.data.frame(rowData(sce))
+adata = sc$AnnData(X = t(exprs),obs = col_data, var = row_data)
+store = "<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/adata"
+anndata::write_h5ad(adata, paste0(store, "/GBM_Ant.h5ad"))
+
+
+```
+
+
+## Infection data:
+```{r}
+inf <- Seurat::Read10X_h5("~/Desktop/ElectroGenomics/Data/Microglia/raw_feature_bc_matrix_TBB_wholeBrainInfectedMicroglia/K4_raw_feature_bc_matrix.h5")
+inf <- Seurat::CreateSeuratObject(inf, min.features=100)
+
+inf2 <- Seurat::Read10X_h5("~/Desktop/ElectroGenomics/Data/Microglia/raw_feature_bc_matrix_TBB_wholeBrainNaive/K3_raw_feature_bc_matrix.h5")
+inf2 <- Seurat::CreateSeuratObject(inf2, min.features=100)
+
+inf = merge(inf, inf2)
+inf <- JoinLayers(inf)
+anno <- read.csv("~/Desktop/ElectroGenomics/Data/Microglia/annot_TBB_wholeBrainNaiveAndInfected.csv")
+
+inf$celltype = left_join(data.frame(cell = rownames(inf[[]])), 
+                                  anno) %>% pull(cluster)
+inf$batch = left_join(data.frame(cell = rownames(inf[[]])), 
+                                  anno) %>% pull(sample)
+
+s = merge(inf, inf2)
+s = JoinLayers(s)
+
+
+s@meta.data$celltype %>% unique()
+s$Pat_ID = "inf"
+s$Dat_ID = "inf"
+s$Tech_ID = "10X"
+saveRDS(s, "<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/Seurat/Infection.RDS")
+
+
+library(SingleCellExperiment)
+sc <- reticulate::import("scanpy")
+np <- reticulate::import("numpy")
+pd <- reticulate::import("pandas")
+bc <- rownames(s[[]])
+sce <- s %>% 
+  Seurat::as.SingleCellExperiment()
+exprs <- assay(sce, "counts")
+col_data <- as.data.frame(colData(sce))
+row_data <- as.data.frame(rowData(sce))
+adata = sc$AnnData(X = t(exprs),obs = col_data, var = row_data)
+store = "<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/adata"
+anndata::write_h5ad(adata, paste0(store, "/Infection.h5ad"))
+
+```
+
+
+## Trauma:
+```{r}
+files <- dir()
+bw_files = dir() %>% str_detect(., ".bw")
+files <- files[bw_files==F]
+
+mtx = files[files %>% str_detect(., ".mtx.gz")]
+
+files_pur = mtx %>% str_remove_all(., "_matrix.mtx.gz")
+mat = "matrix.mtx.gz"
+bc = "barcodes.tsv.gz"
+feat = "features.tsv.gz"
+
+
+list_seurat = map(1:length(files_pur), .f=function(i){
+  
+  folder = paste0("~/Desktop/ElectroGenomics/Data/Microglia/GSE209552_RAW/",files_pur[i] )
+  dir.create(folder)
+  file.copy(from = paste0(files_pur[i],"_", mat), to = paste0(folder, "/",mat))
+  file.copy(from = paste0(files_pur[i],"_",bc), to = paste0(folder, "/",bc))
+  file.copy(from = paste0(files_pur[i],"_",feat), to = paste0(folder, "/",feat))
+  
+  out = Seurat::Read10X(folder) %>% Seurat::CreateSeuratObject()
+  out$batch = paste0("batch_1")
+  out$sample = paste0(files_pur[i])
+  return(out)
+  
+})
+
+
+merge = list_seurat[[1]]
+for(i in 2:length(list_seurat)){merge = merge(merge, list_seurat[[i]])}
+merge <- JoinLayers(merge)
+
+
+seurat <- 
+  merge %>% 
+  Seurat::FindVariableFeatures() %>% 
+  Seurat::NormalizeData() %>% 
+  Seurat::ScaleData()
+
+## Batch Effect removal    
+seurat <- seurat %>% RunPCA()
+seurat <- harmony::RunHarmony(seurat, group.by.vars=c("sample"))
+
+## Classification
+seurat <- 
+  seurat %>% 
+  Seurat::RunUMAP(reduction="harmony", dims=1:30)
+
+seurat <- 
+  seurat %>% 
+  Seurat::FindNeighbors(reduction="harmony", dims=1:30) %>% 
+  Seurat::FindClusters()
+
+DimPlot(seurat)
+FeaturePlot(seurat, features = "AIF1")
+Seurat::DotPlot(seurat, features = c("AIF1", "CD68"), group.by = "seurat_clusters")
+cluster = c(8,24,25)
+s = seurat
+
+s = subset(s, cells = s@meta.data %>% 
+                    as.data.frame() %>% 
+                    filter(seurat_clusters %in% cluster) %>% 
+                    rownames()
+                    )
+
+
+
+s$Pat_ID = s$sample
+s$Dat_ID = "trauma"
+s$Tech_ID = "10X"
+
+saveRDS(s, "<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/Seurat/Trauma.RDS")
+
+
+library(SingleCellExperiment)
+sc <- reticulate::import("scanpy")
+np <- reticulate::import("numpy")
+pd <- reticulate::import("pandas")
+bc <- rownames(s[[]])
+sce <- s %>% 
+  Seurat::as.SingleCellExperiment()
+exprs <- assay(sce, "counts")
+col_data <- as.data.frame(colData(sce))
+row_data <- as.data.frame(rowData(sce))
+adata = sc$AnnData(X = t(exprs),obs = col_data, var = row_data)
+store = "<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/adata"
+anndata::write_h5ad(adata, paste0(store, "/Trauma.h5ad"))
+
+```
+
+
+## Analysis Seurat:
+```{r}
+files = dir("<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/Seurat", full.names = T, recursive=T, include.dirs = T)
+samples <- 
+  files %>% 
+  str_remove(., ".RDS") %>% 
+  str_remove(., "<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/Seurat/")
+
+
+
+## Merge Files:
+
+seurat = readRDS(files[1])
+for(i in 2:length(files)){print(files[i]);seurat = merge(seurat, readRDS(files[i]))}
+seurat <- JoinLayers(seurat)
+seurat@meta.data$Dat_ID %>% unique()
+
+
+## Remove non Protein encoding genes:
+library(biomaRt)
+mart <- biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl") 
+protein_coding_genes <- biomaRt::getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "gene_biotype"),
+  filters = "biotype",
+  values = "protein_coding",
+  mart = mart
+)
+
+protein_coding_symbols <- 
+  protein_coding_genes$hgnc_symbol %>% 
+  unique()
+protein_coding_symbols <- protein_coding_symbols[!protein_coding_symbols==""]
+
+protein_coding_symbols <- intersect(rownames(seurat), protein_coding_symbols)
+length(protein_coding_symbols)
+
+seurat <- seurat %>% subset(features=protein_coding_symbols)
+seurat@active.assay="RNA"
+
+
+## Preprocessing:
+seurat <- 
+  seurat %>% 
+  Seurat::FindVariableFeatures() %>% 
+  Seurat::NormalizeData() %>% 
+  Seurat::ScaleData()
+
+## Batch Effect removal    
+seurat <- seurat %>% RunPCA()
+seurat <- harmony::RunHarmony(seurat, group.by.vars=c("Pat_ID", "Dat_ID", "Tech_ID"))
+
+## Classification
+seurat <- 
+  seurat %>% 
+  Seurat::RunUMAP(reduction="harmony", dims=1:30)
+
+
+seurat %>% Seurat::DimPlot(group.by = "Dat_ID")
+seurat %>% Seurat::DimPlot(group.by = "seurat_clusters", label = T)
+
+seurat %>% Seurat::FeaturePlot("AIF1")
+seurat %>% Seurat::FeaturePlot("TMEM119")
+seurat %>% Seurat::FeaturePlot("CD68")
+seurat %>% Seurat::FeaturePlot("CD163")
+seurat %>% Seurat::FeaturePlot("MBP")
+
+seurat <- 
+  seurat %>% 
+  Seurat::FindNeighbors(reduction="harmony", dims=1:30) %>% 
+  Seurat::FindClusters()
+DimPlot(seurat)
+
+marker <- seurat %>% Seurat::FindAllMarkers()
+top_marker <- 
+  marker %>% 
+  group_by(cluster) %>% 
+  top_n(n=6, wt=avg_log2FC)
+
+
+
+myeloid_marker = c("TMEM119","P2RY12", "CX3CR1", "TREM2", "CSF1R","SPP1",
+                                  "C1QA", "C1QB", "C1QC","DNAI3", "CHRNA9","CD207","FCER1A", "CXCL2",
+                                  "SELENOP","RNASE1", "GPR42", "PCDHGC3","SPARC", "EGFR",
+                                  "VCAN", "BNIP3", "VIM", "CD163", "HEXB", "CD68", "STAT1", "CCL5", "IRF7", "TNF", "IL10", "APOE", "IL1B", "IL6", "TGM2", "STAT3", "OSMR", "MKI67", "TOP2A", "HMOX1", "ARG1", "CD206", "CD276", "LYVE1", "MRC1", "OLFML3", "CD74", "HLA−DRB2", "CD36", "PLAUR", "MPHOSPH6", "AREG", "MBP", "GFAP")
+
+```
+
+```{r}
+DotPlot(seurat, myeloid_marker, group.by = "seurat_clusters")+
+  scale_color_gradientn(colors=viridis::inferno(50))+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=1 ,size=10), 
+          axis.text.y = element_text(colour="black", size=5))
+
+## Define Clusters
+
+cell_anno = data.frame(C0 = "Micoglia_Phagocytosis",
+           C1 = "MDM_Phagocytosis",
+           C2 = "Microglia_IL1B",
+           C3 = "MDM_Hypoxia",
+           C4 = "Microglia_IFN" ,
+           C5 = "Microglia_Homeostatic",
+           C6 = "MDM_Phagocytosis",
+           C7 = "Microglia_Preinflamm",
+           C8 = "CAM_MRC1",
+           C9 = "MDM_Angiogenic",
+           C10 = "Microglia_TREM2_IL6",
+           C11 = "Microglia_TREM2_STAT3",
+           C12 = "MGM_Homing",
+           C13 = "Oligodendrocytes",
+           C14 = "Microglia_SPP1" ,
+           C15 = "Microglia_Prolif.",
+           C16 = "MDM_Prolif.",
+           C17 = "Microglia_PDL1_STAT3",
+           C18 = "Oligodendrocytes",
+           C19 = "Oligodendrocytes",
+           C20 = "Microglia_PDL1_STAT3",
+           C21 = "Microglia_IL1B",
+           C22 = "MGM_Homing",
+           C23 = "MGM_IFN",
+           C24 = "Kolmer Cells",
+           C25 = "Oligodendrocytes") %>% t() %>% as.data.frame() %>% mutate(seurat_cluster = as.factor(0:25))
+
+
+
+seurat$cells = 
+  left_join(data.frame(seurat_cluster = seurat$seurat_clusters), cell_anno) %>% pull(V1)
+
+seurat %>% Seurat::DimPlot(group.by = "cells", label = T)
+
+filter_cells2 = seurat@meta.data %>% 
+                    as.data.frame() %>% 
+                    filter(cells != "Oligodendrocytes") %>% 
+                    rownames()
+seurat <- subset(seurat,  cells = filter_cells2)
+seurat %>% Seurat::DimPlot(group.by = "cells", label = T)
+
+
+p=Seurat::DotPlot(seurat, features = top_marker$gene %>% unique() , group.by = "seurat_clusters")+
+  scale_color_gradientn(colors=viridis::inferno(50))+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+  
+p$data %>% 
+  ggplot()+
+  geom_tile(mapping=aes(x=id, y=features.plot, fill=avg.exp.scaled), shape=21)+
+  scale_fill_gradientn(colors=viridis::inferno(50), 
+                       limits=c(0.3,1), oob=scales::squish)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+```
+
+## Bring subgroups hierachical together:
+
+```{r}
+
+cor_df <- 
+  seurat@reductions$harmony@cell.embeddings[,1:10] %>% 
+  as.data.frame() %>% 
+  mutate(cluster = seurat$cells) %>% 
+  group_by(cluster) %>% 
+  summarise_all(.funs = mean)
+
+cor_mat = cor_df[,-c(1)] %>% t() %>% cor() %>% as.matrix()
+rownames(cor_mat) = colnames(cor_mat) = paste0(cor_df$cluster)
+
+cluster = pheatmap::pheatmap(cor_mat, 
+                             color = colorRampPalette(c("#FFFFFF",(RColorBrewer::brewer.pal(n = 5, "Greens"))))(100),
+                             breaks = c(seq(from = 0.94, to=1, length.out=100)))
+
+## Hierachical clustering:
+plot(cluster$tree_col)
+cclust = cutree(cluster$tree_col, k=9)
+cluster_df <- data.frame(cluster = cclust, row.names = cor_df$cluster) %>% arrange((cluster))
+
+seurat$cells <- as.factor(seurat$cells)
+seurat$cells = factor(seurat$cells, levels = rownames(cluster_df))
+Idents(seurat) = seurat$cells
+
+marker <- seurat %>% Seurat::FindAllMarkers()
+top_marker <- 
+  marker %>% 
+  group_by(cluster) %>% 
+  top_n(n=5, wt=avg_log2FC)
+
+```
+
+## Plot heatmap of subtype:
+```{r}
+
+p=Seurat::DotPlot(seurat, features = top_marker$gene %>% unique() , group.by = "cells")+
+  scale_color_gradientn(colors=viridis::inferno(50))+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+  
+p$data %>% 
+  ggplot()+
+  geom_tile(mapping=aes(x=id, y=features.plot, fill=avg.exp.scaled), shape=21)+
+  scale_fill_gradientn(colors=viridis::inferno(50), 
+                       limits=c(0.3,1), oob=scales::squish)+
+  #scale_x_discrete(limits = c(paste0("K_", 1:12)))+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=0.5 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+
+
+
+
+
+```
+
+## Compare to GBMap
+```{r}
+ref <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBMap_Neuron.RDS")
+ref$annotation_level_2[is.na(ref$annotation_level_2)] <- "Neurons"
+
+
+ref$annotation_level_4 <- ref$annotation_level_4 %>% 
+  str_replace_all(., "-", "_") %>% 
+  str_replace_all(., " ", "_") %>% 
+  str_replace_all(., "/", "_")
+
+colors <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBM_Neuron_colors.RDS")
+colors$annotation_level_4_new <- 
+  colors$annotation_level_4 %>% 
+  str_replace_all(., "-", "_") %>% 
+  str_replace_all(., " ", "_") %>% 
+  str_replace_all(., "/", "_")
+
+col_new <- colors$colors;names(col_new) <- colors$annotation_level_4_new
+
+```
+
+```{r}
+
+query <- Seurat::DietSeurat(seurat)
+DefaultAssay(query) <- "RNA"
+query@assays$SCT <- NULL
+
+az_ref <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/azimuth_core_GBmap.rds")
+az_ref$annotation_level_4 <-
+  str_replace_all(az_ref$annotation_level_4, "[ ]", "_") %>%
+  str_replace_all(., "-", "_") %>%
+  str_replace_all(., "/", "_")
+
+#library(Azimuth)
+source('<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/modified_azimuth.R')
+ds.ref <- 
+  RunAzimuth.Seurat(query,
+             reference = az_ref, 
+             normalization.method="LogNormalize",
+             annotation.levels = c('annotation_level_3', 'annotation_level_4'))
+
+seurat$anno_GBMap = ds.ref$predicted.annotation_level_4
+
+
+data.frame(anno = seurat$anno_GBMap, cell = seurat$cells) %>% 
+  filter(anno %in% c(colors %>% filter(annotation_level_2=="Myeloid") %>% pull(annotation_level_4_new))) %>% 
+  group_by(anno,cell) %>% 
+  dplyr::count() %>% 
+  ggplot()+
+  geom_tile(mapping=aes(anno, cell, fill=n))+
+  scale_fill_gradientn(colors=viridis::inferno(50), 
+                       #limits=c(0.3,1), 
+                       oob=scales::squish)+
+  #scale_x_discrete(limits = c(paste0("K_", 1:12)))+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black",
+                                     angle = 90, vjust = 0.5, hjust=1 ,size=5), 
+          axis.text.y = element_text(colour="black", size=5))
+
+
+
+## New to GBMap:
+seurat <- Seurat::RunUMAP(seurat,return.model = T, reduction = "harmony", dims = 1:30)
+az_ref <- Seurat::DietSeurat(az_ref)
+az_ref <- subset(az_ref, cells=
+                   az_ref@meta.data %>% 
+                   as.data.frame() %>% 
+                   filter(annotation_level_2=="Myeloid") %>% 
+                   rownames())
+#az_ref = spAnchor::DownScaleSeurat(az_ref, maintain_var="annotation_level_4")
+
+DimPlot(seurat, label = T)
+ds.ref2 <- 
+  RunAzimuth.Seurat(az_ref,
+             reference = seurat, 
+             normalization.method="LogNormalize",
+             annotation.levels = c('cells'))
+
+DimPlot(ds.ref2, label = T, group.by = "predicted.cells")
+
+## Add names To GBMAp
+
+ds.ref2@meta.data %>% as.data.frame() %>% saveRDS("New_cell_anno_myeloid.RDS")
+seurat %>% saveRDS("Myeloid_combined.RDS")
+ds.ref2 %>% saveRDS("ds.ref2.RDS")
+
+```
+
+
+## Plot 
+```{r}
+
+DimPlot(seurat, label = T, raster=T, pt.size = 4, raster.dpi = c(1512, 1512))+
+  scale_color_manual(values=py$tab20_hex_colors)
+
+myeloid_color = data.frame(cell_type = levels(seurat@active.ident), color = py$tab20_hex_colors[1:length(levels(seurat@active.ident))])
+myeloid_color %>% saveRDS("myeloid_color.RDS")
+
+myeloid_color <- readRDS("<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/Seurat/myeloid_color.RDS")
+
+```
+
+
+## Where are this cells ? 
+## Plots spatial transcriptomic data:
+
+## Load samples
+```{r}
+root_visium = "~/Desktop/RecurrentGBM/Data"
+root_graphs = "~/Desktop/RecurrentGBM/Graphs/FullSubgraphs"
+root_pts = "~/Desktop/RecurrentGBM/Graphs/PyGeometric_files"
+root_SPATA = "~/Desktop/RecurrentGBM/SPATA2_Objects"
+root_adata = "~/Desktop/RecurrentGBM/adata_Objects"
+
+meta_data_filesystem <- read.csv("~/Desktop/RecurrentGBM/Tabellen/meta_data_filesystem.csv", sep=";")
+meta_data <- read.csv("~/Desktop/RecurrentGBM/Tabellen/Clinical_Data_19_07_2024.csv", sep=";")
+dim(meta_data)
+
+kable(data.frame(type=meta_data$Subgroup, 
+                 encode= meta_data$Class_n) %>% 
+        group_by(type,encode) %>% 
+        dplyr::count(), 
+      title = "Experimental Design", 
+      align = "c", bootstrap_options = c("condensed")) %>%
+  kable_styling(full_width = FALSE, position = "left")
+
+
+spata_objects <- paste0(root_SPATA,"/",meta_data_filesystem$SPATA_objects)
+file.exists(spata_objects) %>% table()
+
+```
+
+## single cell spatial Data:
+```{r}
+
+deconv <- dir("~/Desktop/RecurrentGBM/SPATA2Deconv", pattern = "_spAnchor_list.RDS")
+samples_deconv <- deconv %>% str_split(., "_") %>% map(~paste0(.x[1], "_", .x[2])) %>% unlist
+samples_deconv_df <- data_frame(Samples_ID=samples_deconv, path_deconv=dir("~/Desktop/RecurrentGBM/SPATA2Deconv", pattern = "_spAnchor_list.RDS", full.names = T))
+
+
+## Get the neural score:
+
+samples_deconv_df <- left_join(samples_deconv_df, data.frame(Samples_ID = meta_data$Samples_ID, neural = meta_data$Cortical_neurons))
+samples_deconv_df <- samples_deconv_df %>% filter(!is.na(neural))
+
+samp_test <- samples_deconv[c(1:26,30:43)]
+
+```
+
+
+## Neural high vs neural low
+
+```{r}
+
+high = c("404_R", "269_T", "811_R", "801_R")
+low = c("818_R", "813_T", "313_T", "313_R")
+
+high_intersect <- map_dfr(high, .f=function(s){
+  
+object_list <- readRDS(samples_deconv_df %>% filter(Samples_ID==s) %>% pull(path_deconv))
+
+for(i in 1:length(object_list$cell_map)){object_list$cell_map[[i]]$match <- as.character(object_list$cell_map[[i]]$match)}
+cell_types <- object_list$cell_map %>% map_dfr(., ~.x %>% as.data.frame())
+
+## Annotation with GBMap_new
+intersect = intersect(cell_types$match %>% unique(), colnames(ds.ref2))
+new_annotation_spatial = ds.ref2@meta.data[intersect,] %>% as.data.frame() %>% rownames_to_column("match") %>% select(match, predicted.cells)
+cell_types <- left_join(cell_types, new_annotation_spatial)
+cell_types[!is.na(cell_types$predicted.cells), "celltypes"] <- 
+  cell_types[!is.na(cell_types$predicted.cells), "predicted.cells"] 
+cell_types$sample_ID = s
+
+return(cell_types)
+
+})
+low_intersect <- map_dfr(low, .f=function(s){
+  
+object_list <- readRDS(samples_deconv_df %>% filter(Samples_ID==s) %>% pull(path_deconv))
+
+for(i in 1:length(object_list$cell_map)){object_list$cell_map[[i]]$match <- as.character(object_list$cell_map[[i]]$match)}
+cell_types <- object_list$cell_map %>% map_dfr(., ~.x %>% as.data.frame())
+
+## Annotation with GBMap_new
+intersect = intersect(cell_types$match %>% unique(), colnames(ds.ref2))
+new_annotation_spatial = ds.ref2@meta.data[intersect,] %>% as.data.frame() %>% rownames_to_column("match") %>% select(match, predicted.cells)
+cell_types <- left_join(cell_types, new_annotation_spatial)
+cell_types[!is.na(cell_types$predicted.cells), "celltypes"] <- 
+  cell_types[!is.na(cell_types$predicted.cells), "predicted.cells"] 
+cell_types$sample_ID = s
+
+return(cell_types)
+
+})
+
+color_sc_myeloid = myeloid_color$color;names(color_sc_myeloid)=myeloid_color$cell_type
+comb = rbind(
+high_intersect %>% 
+  mutate(meth="high") %>% 
+  filter(!is.na(predicted.cells) & predicted.cells!="Kolmer Cells"),
+low_intersect %>% 
+  mutate(meth="low") %>% 
+  filter(!is.na(predicted.cells) & !predicted.cells %in% c("Kolmer Cells", 
+                                                          "Microglia_TREM2_STAT3",
+                                                          "Microglia_TREM2_IL6"))
+) %>% 
+  group_by(predicted.cells, meth) %>% 
+  dplyr::count()
+
+
+ggplot(comb)+
+  geom_col(mapping=aes(meth, n, fill=predicted.cells), position = "fill")+
+  scale_fill_manual(values = color_sc_myeloid)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))
+  
+
+high_cells = 
+  high_intersect %>% 
+  mutate(meth="high") %>% 
+  filter(!is.na(predicted.cells) & predicted.cells!="Kolmer Cells")
+
+low_cells = 
+  low_intersect %>% 
+  mutate(meth="low") %>% 
+  filter(!is.na(predicted.cells) & !predicted.cells %in% c("Kolmer Cells", 
+                                                          "Microglia_TREM2_STAT3",
+                                                          "Microglia_TREM2_IL6"))
+
+## plot seurat
+ds.ref2$cells = factor(ds.ref2$predicted.cells, levels = myeloid_color$cell_type)
+DimPlot( subset(ds.ref2, cells = low_cells$match) , 
+         group.by="cells", reduction = "ref.umap", 
+         label = F, raster=T, pt.size = 5, 
+         raster.dpi = c(1512, 1512))+
+  scale_color_manual(values=color_sc_myeloid)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+## Get some plots with new subgroups
+
+```{r}
+object_list <- readRDS(samples_deconv_df %>% filter(Samples_ID=="404_R") %>% pull(path_deconv))
+
+for(i in 1:length(object_list$cell_map)){object_list$cell_map[[i]]$match <- as.character(object_list$cell_map[[i]]$match)}
+cell_types <- object_list$cell_map %>% map_dfr(., ~.x %>% as.data.frame())
+
+## Annotation with GBMap_new
+intersect = intersect(cell_types$match %>% unique(), colnames(ds.ref2))
+new_annotation_spatial = ds.ref2@meta.data[intersect,] %>% as.data.frame() %>% rownames_to_column("match") %>% select(match, predicted.cells)
+cell_types <- left_join(cell_types, new_annotation_spatial)
+cell_types[!is.na(cell_types$predicted.cells), "celltypes"] <- 
+  cell_types[!is.na(cell_types$predicted.cells), "predicted.cells"] 
+
+## plot seurat
+ds.ref2$cells = factor(ds.ref2$predicted.cells, levels = myeloid_color$cell_type)
+color_sc_myeloid = myeloid_color$color;names(color_sc_myeloid)=myeloid_color$cell_type
+DimPlot( subset(ds.ref2, cells = intersect) , 
+         group.by="cells", reduction = "ref.umap", 
+         label = F, raster=T, pt.size = 20, 
+         raster.dpi = c(1512, 1512))+
+  scale_color_manual(values=color_sc_myeloid)
+
+
+
+table(cell_types$celltypes)
+
+object <- object_list$object %>% SPATA2::updateSpataObject()
+colors <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBM_Neuron_colors.RDS")
+colors$annotation_level_4new <- 
+  colors$annotation_level_4 %>% 
+  str_replace_all(" ", "_") %>% 
+  str_replace_all("-", "_") %>% 
+  str_replace_all("/", "_")
+# Add new myeloid lables 
+cc_myeloid = colors[colors$annotation_level_2=="Myeloid", "colors"] %>% pull(colors)
+
+colors <- rbind(colors %>% filter(annotation_level_2!="Myeloid"),
+                data.frame(annotation_level_2="Myeloid", 
+           annotation_level_4 = new_annotation_spatial$predicted.cells %>% unique(), 
+           n=1, colors = colorRampPalette(c(cc_myeloid[3], cc_myeloid[11]))(length(new_annotation_spatial$predicted.cells %>% unique())),
+           annotation_level_4new = new_annotation_spatial$predicted.cells %>% unique()))
+
+cell_types$celltypes <- factor(cell_types$celltypes, levels = colors$annotation_level_4new)
+cc <- colors$colors;names(cc) <- colors$annotation_level_4new
+
+cell_types
+
+ggplot(cell_types, aes(x, y, fill = celltypes))+
+  geom_point(shape=21, size=1)+
+  scale_fill_manual(values=cc)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  SPATA2::ggpLayerAxesSI(object)+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+library(ggforce)
+ggplot(cell_types, aes(x, y, group = -1L)) +
+    geom_voronoi_tile(aes(fill = celltypes), max.radius = 10, colour = 'black', linewidth=0.1)+
+    scale_fill_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  SPATA2::ggpLayerAxesSI(object)+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+## Plot only microglia cells 
+myeloid_color
+cc <- rep("lightgrey",nrow(colors)) ; names(cc) <- colors$annotation_level_4new
+cc[c(myeloid_color %>% filter(cell_type %in% names(cc)) %>% pull(cell_type))] = 
+  myeloid_color %>% filter(cell_type %in% names(cc)) %>% pull(color)
+
+library(ggforce)
+ggplot(cell_types, aes(x, y, group = -1L)) +
+    geom_voronoi_tile(aes(fill = celltypes), max.radius = 10, colour = 'black', linewidth=0.1)+
+    scale_fill_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  SPATA2::ggpLayerAxesSI(object)+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+
+```
+
+
+
+
+
+
+
+## NN analysis
+```{r}
+returnNN <- function(i){
+    
+object_list <- readRDS(samples_deconv_df %>% filter(Samples_ID==samp_test[i]) %>% pull(path_deconv))
+library(deldir)
+df <- object_list$cell_types %>% na.omit()
+triangulation <- deldir(df$x, df$y)
+
+net_df <- data.frame(from=df$cells[triangulation$delsgs$ind1],
+                    to=df$cells[triangulation$delsgs$ind2])
+
+### Remove connection with long distance
+net_df$x1 <- df$x[match(net_df$from, df$cells)]
+net_df$y1 <- df$y[match(net_df$from, df$cells)]
+net_df$x2 <- df$x[match(net_df$to, df$cells)]
+net_df$y2 <- df$y[match(net_df$to, df$cells)]
+net_df$dist <- sqrt((net_df$x2-net_df$x1)^2 + (net_df$y2-net_df$y1)^2)
+dist_threshold= c(net_df$dist %>% mean())+20
+net_df <- net_df %>% filter(!dist>dist_threshold)
+net <- igraph::graph_from_data_frame(net_df[,c("from", "to")])
+V(net)$x <- df$x[match(V(net)$name, df$cells)]
+V(net)$y <- df$y[match(V(net)$name, df$cells)]
+E(net)$dist <- net_df$dist
+cells <- object_list$cell_types %>% filter(celltypes %in% c("B_cell", "Plasma_B"))
+if(nrow(cells)==0){
+  object_list$cell_types$celltypes <- 
+  object_list$cell_types$celltypes %>% 
+  str_replace_all("[.]", "_") %>% 
+  str_replace_all("-", "_") %>% 
+  str_replace_all("/", "_")
+}
+cells <- object_list$cell_types %>% filter(celltypes %in% c("B_cell", "Plasma_B"))
+
+listofB_NN <- map_dfr(1:length(cells$cells), .f=function(ii){
+  first_order_subgraph <- induced_subgraph(net, unlist(ego(net, order = 1, nodes = cells$cells[ii])))
+  df <- first_order_subgraph %>% igraph::get.data.frame() %>%  mutate(NN=ii)
+  NN_cells <- data.frame(cells = unique(c(df$from, df$to)), NN=ii)
+  
+})
+Bcell_NN <- 
+  left_join(listofB_NN, object_list$cell_types %>% select(cells, celltypes), by="cells") %>% 
+  mutate(sample = samp_test[i])
+
+return(Bcell_NN)
+}
+safe_f <- safely(returnNN)
+B_cell_NN <- map(c(1:length(samp_test)), ~safe_f(.x), .progress=T)
+B_cell_NN_res <-map_dfr(B_cell_NN, ~.x$result)
+
+table(B_cell_NN_res$sample)
+
+df <- 
+  B_cell_NN_res %>% 
+  group_by(celltypes) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(from="B_cells", to = celltypes, weight=n) %>% 
+  left_join(., data.frame(celltypes=colors$annotation_level_4new,
+                           main=colors$annotation_level_2)) %>% 
+  as.data.frame()
+
+df <- 
+  B_cell_NN_res %>% 
+  left_join(., data.frame(celltypes=colors$annotation_level_4new,
+                           main=colors$annotation_level_2)) %>% 
+  group_by(main) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(from="B_cells", to = main, weight=n) %>% 
+  as.data.frame()
+
+df <- df %>% filter(main=="Myeloid")
+
+
+df <- df[,c("from", "to", "weight")]
+
+df <- df %>% filter(weight<500)
+
+df$weight[5]=754
+
+col_n <- colors$colors
+#names(col_n) <- colors$annotation_level_4new
+names(col_n) <- colors$annotation_level_2
+graph <- igraph::graph_from_data_frame(df, directed=T)
+E(graph)$magnitude <- df$weight
+E(graph)$color <- df$to %>% as.character()
+type <- c(df$from, df$to %>% as.character()) %>% unique()
+V(graph)$type <- type 
+
+V(graph)$type
+library(ggraph)
+library(ggrepel)
+ggraph(graph, layout = 'linear', circular = TRUE)+
+  geom_edge_arc2(aes(width=magnitude, alpha=magnitude, edge_color = color))+
+  geom_node_point(aes(color=type), size=8)+
+  coord_fixed()+
+  theme_classic()+
+  scale_color_manual(values=col_n)+
+  scale_edge_color_manual(values=col_n)+
+  geom_text_repel(aes(x=x, y=y,label=type %>% str_replace_all(., "[.]", " ")), size=3)
+
+
+g <- map_dfr(1:3, ~load.data.ex[[.x]][[1]] %>% mutate(sample=.x))
+g <- g %>% group_by(from, to) %>% summarise(magnitude=mean(magnitude), de=mean(de))
+
+```
+
+## B cell frequence
+```{r}
+B_cell_NN_res$sample %>% unique()
+B_cell_NN_res$type <- map(B_cell_NN_res$sample %>% as.character(), ~str_split(.x, "_")[[1]][2]) %>% unlist()
+
+plot_df <- 
+  B_cell_NN_res %>% 
+  filter(celltypes %in% c("Plasma_B", "B_cell")) %>% 
+  group_by(sample,type) %>% count() %>% 
+    arrange(desc(n))
+
+plot_df <- left_join(plot_df, meta_data %>% select(Samples_ID, OS, Class_n, Cortical_neurons, Death) %>% mutate(sample=Samples_ID))
+plot_df[plot_df$type=="R1",]$type <- "R"
+plot_df <- plot_df %>% filter(type!="C")
+plot_df$OS[2] <- 2045
+plot_df$Death[2] <- "yes"
+
+
+ggplot(plot_df)+
+  geom_point(mapping=aes(x=sample, y=log(n), fill=type, size=OS), shape=21, color="black")+
+  theme_bw()+
+  scale_fill_manual(values=py$tab10_hex_colors)+
+  scale_x_discrete(limits=plot_df$sample)+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black", angle=90, hjust=1),
+        axis.text.y = element_text(colour="black"))
+
+
+library(survival)
+library(survminer)
+plot_df <- plot_df %>% mutate(B_high=if_else(n>50, "high", "low"))
+plot_df$staus <- if_else(plot_df$Death=="yes", 1, 0)
+plot_df$staus[1:4]=1
+km_fit <- survfit(Surv(OS, staus) ~ B_high, data = plot_df)
+ggsurvplot(km_fit, 
+             data = plot_df,
+             xlab = "Time (Months)",  # Change as needed
+             ylab = "Survival Probability",
+             legend.title = "Group",
+             legend.labs = c("High", "Low"),
+             pval = TRUE, # Show p-value
+             risk.table = TRUE) # Show risk table
+
+
+
+
+
+
+```
+
+
+## TGF Beta signaling
+
+```{r}
+
+s_loop <- B_cell_NN_res$sample %>% unique()
+
+B_cell_NN_res_new <- map_dfr(1:length(s_loop), .f=function(i){
+  object_list <- readRDS(samples_deconv_df %>% filter(Samples_ID==s_loop[i]) %>% pull(path_deconv))
+  obj <- object_list$object %>% SPATA2::updateSpataObject()
+  NN <- B_cell_NN_res %>% filter(sample==s_loop[i])
+  NN_loop <- NN$NN %>% unique()
+  NN_new <- map_dfr(NN_loop,.f=function(ii){
+    
+    NN_s <- NN %>% filter(NN==ii)
+    ## get spots
+    bc <- object_list$cell_types %>% filter(cells %in% NN_s$cells) %>% pull(barcodes)
+    #SPATA2::getGeneSets(object_list$object, index="TGF")
+    NN_s$TGFB <- SPATA2::joinWithGeneSets(obj, gene_sets = "HM_TGF_BETA_SIGNALING") %>% 
+      filter(barcodes %in% bc) %>% 
+      pull(HM_TGF_BETA_SIGNALING) %>% 
+        mean()
+    
+    return(NN_s)
+    
+    
+  })
+  return(NN_new)
+  
+}, .progress=T)
+
+B_cell_NN_res_new <- B_cell_NN_res_new %>% mutate(NN = paste0(NN,"_", sample))
+
+df <- 
+  B_cell_NN_res_new %>% 
+  left_join(., data.frame(celltypes=colors$annotation_level_4new,
+                           main=colors$annotation_level_2)) %>% 
+  mutate(NN = paste0(NN,"_", sample)) %>% 
+  group_by(NN,main) %>% 
+  summarise(TGF=mean(TGF), n=n())
+
+
+frequencies <- 
+  df %>%
+  filter(main %in% c("Vascular", "Myeloid")) %>%  
+  group_by(NN, main) %>%  
+  summarise(Frequency = sum(n), .groups = "drop") %>% 
+  pivot_wider(names_from = main, values_from = Frequency, values_fill = 0)
+
+frequencies <- left_join(frequencies, data.frame(NN=B_cell_NN_res_new$NN, TGF=B_cell_NN_res_new$TGFB))
+
+ggplot(frequencies %>% filter(Vascular<4))+
+  geom_boxplot(mapping=aes(x=Vascular %>% as.factor(), y=TGF, fill=Vascular %>% as.factor()))+
+  theme_bw()+
+  scale_fill_manual(values=py$tab10_hex_colors)+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black", angle=90, hjust=1),
+        axis.text.y = element_text(colour="black"))
+
+ggplot(frequencies%>% filter(Myeloid<5))+
+  geom_boxplot(mapping=aes(x=Myeloid %>% as.factor(), y=TGF, fill=Myeloid %>% as.factor()))+
+   theme_bw()+
+  scale_fill_manual(values=py$tab10_hex_colors)+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black", angle=90, hjust=1),
+        axis.text.y = element_text(colour="black"))
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+object_list <- readRDS(samples_deconv_df %>% filter(Samples_ID=="269_R") %>% pull(path_deconv))
+cell_types <- object_list$cell_types
+table(cell_types$celltypes)
+
+object <- object_list$object %>% SPATA2::updateSpataObject()
+colors <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBM_Neuron_colors.RDS")
+colors$annotation_level_4new <- 
+  colors$annotation_level_4 %>% 
+  str_replace_all(" ", "_") %>% 
+  str_replace_all("-", "_") %>% 
+  str_replace_all("/", "_")
+
+cell_types$celltypes <- factor(cell_types$celltypes, levels = colors$annotation_level_4new)
+cc <- colors$colors;names(cc) <- colors$annotation_level_4new
+library(ggforce)
+ggplot(cell_types, aes(x, y, group = -1L)) +
+    geom_voronoi_tile(aes(fill = celltypes), max.radius = 10, colour = 'black', linewidth=0.1)+
+    scale_fill_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  SPATA2::ggpLayerAxesSI(object)+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+colors <- colors %>% mutate(BB=if_else(annotation_level_4new %in% c("B_cell", "Plasma_B"), "red", "lightgrey"))
+#cc <- colors$colors;names(cc) <- colors$annotation_level_4new
+cc <- colors$BB;names(cc) <- colors$annotation_level_4new
+library(ggforce)
+ggplot(cell_types, aes(x, y, group = -1L)) +
+    geom_voronoi_tile(aes(fill = celltypes), max.radius = 10, colour = 'black', linewidth=0.1)+
+    scale_fill_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  SPATA2::ggpLayerAxesSI(object)+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+
+
+## Get B cell NN
+
+getGraph <- function(df){
+  triangulation <- deldir(df$x, df$y)
+  net_df <- data.frame(from=df$cells[triangulation$delsgs$ind1],
+                    to=df$cells[triangulation$delsgs$ind2])
+  ### Remove connection with long distance
+  net_df$x1 <- df$x[match(net_df$from, df$cells)]
+  net_df$y1 <- df$y[match(net_df$from, df$cells)]
+  net_df$x2 <- df$x[match(net_df$to, df$cells)]
+  net_df$y2 <- df$y[match(net_df$to, df$cells)]
+  net_df$dist <- sqrt((net_df$x2-net_df$x1)^2 + (net_df$y2-net_df$y1)^2)
+  dist_threshold= c(net_df$dist %>% mean())+20
+  net_df <- net_df %>% filter(!dist>dist_threshold)
+  net <- igraph::graph_from_data_frame(net_df[,c("from", "to")])
+  V(net)$x <- df$x[match(V(net)$name, df$cells)]
+  V(net)$y <- df$y[match(V(net)$name, df$cells)]
+  E(net)$dist <- net_df$dist
+  return(net)
+}
+graph <- getGraph(object_list$cell_types %>% na.omit())
+df <- object_list$cell_types
+getNN <- function(df,graph, hop, cell){
+  
+  first_order_subgraph <- induced_subgraph(graph, unlist(ego(graph, order = hop, nodes = cell)))
+  df_out <- first_order_subgraph %>% igraph::get.data.frame()
+  NN_cells <- data.frame(cells = unique(c(df_out$from, df_out$to))) %>% left_join(.,df, by="cells")
+  return(NN_cells)
+}
+
+
+
+cell_types$celltypes <- factor(cell_types$celltypes, levels = colors$annotation_level_4new)
+cc <- colors$colors;names(cc) <- colors$annotation_level_4new
+
+all_cellNN <- B_cell_NN_res %>% filter(sample=="269_R")
+
+cells_NN <- all_cellNN %>% filter(NN==10) %>% filter(celltypes %in% c("Plasma_B", "B_cell"))
+cell_types_select_small <- getNN(df, graph, hop=2, cells_NN$cells)
+cell_types_select_larg <- getNN(df, graph, hop=6, cells_NN$cells)
+
+cell_types_select_larg[!c(cell_types_select_larg$cells %in% cell_types_select_small$cells), ]$celltypes <- "outside"
+cc <- c(cc, outside="#F2F2F2")  
+
+cell_types_select <- cell_types_select_larg
+library(ggforce)
+ggplot(cell_types_select,aes(x, y, group = -1L)) +
+    geom_voronoi_tile(mapping = aes(fill = celltypes), max.radius = 10, colour = 'black', linewidth=0.1)+
+    scale_fill_manual(values=cc, na.value = "#F2F2F2")+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  SPATA2::ggpLayerAxesSI(object)+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+
+
+```
+
+
+
+
+
+
+
+R-L interaction 
+## Cell Chat Analysis:
+
+```{r}
+
+GbMap = ref
+GbMap@meta.data$cells=GbMap@meta.data$annotation_level_4
+GbMap@meta.data[rownames(ds.ref2@meta.data), "cells"] = ds.ref2@meta.data$predicted.cells
+
+
+cells_in_counts <- Seurat::GetAssayData(GbMap, assay = "RNA", slot = "data") %>% colnames()
+GbMap@meta.data <- GbMap@meta.data[cells_in_counts, ]
+GbMap$cells <- as.factor(GbMap$cells)
+
+DimPlot(GbMap, group.by = "cells") + Seurat::NoLegend()
+
+library(CellChat)
+library(patchwork)
+library(Seurat)
+library(tidyverse)
+options(stringsAsFactors = FALSE)
+cellchat <- createCellChat(object = Seurat::GetAssayData(GbMap) ,assay="SCT", group.by = "cells", meta = GbMap@meta.data %>% as.data.frame())
+cellchat <- setIdent(cellchat, ident.use = "cells") 
+levels(cellchat@idents) 
+groupSize <- as.numeric(table(cellchat@idents))
+CellChatDB <- CellChatDB.human 
+cellchat@DB <- CellChatDB
+cellchat <- subsetData(cellchat)
+options(future.globals.maxSize= 8500*1024^2)
+future::plan("multisession", workers = 4) 
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+cellchat <- projectData(cellchat, PPI.human)
+cellchat <- computeCommunProb(cellchat, type = "triMean")
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+cellchat <- computeCommunProbPathway(cellchat)
+cellchat <- aggregateNet(cellchat)
+
+saveRDS(cellchat, "cellchat_GBMap.RDS")
+
+```
+
+
+## Merge Object
+```{r}
+
+groupSize <- as.numeric(table(cellchat@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_circle(cellchat@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(cellchat@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+
+```
+
+
+## Microglia
+```{r}
+mat <- cellchat@net$weight
+
+## Interaction to MG cells
+mat_df <- mat %>% as.data.frame()
+mat_df$anno=""
+mat_df[c("Microglia_IFN",
+         "Microglia_TREM2_IL6",
+         "Microglia_TREM2_STAT3",
+         "Microglia_PDL1_STAT3"), ]$anno="MG"
+mat_df[c("NPC_like_OPC",
+         "NPC_like_neural"), ]$anno="NPC"
+
+mat_df[c("OPC_like"), ]$anno="OPC-like"
+mat_df[c("AC_like"), ]$anno="AC_like"
+mat_df[c("Astrocyte"), ]$anno="Astrocyte"
+mat_df[c("OPC"), ]$anno="OPC"
+mat_df[c("Oligodendrocyte"), ]$anno="Oligodendrocyte"
+mat_df[colors %>% filter(annotation_level_2=="Neurons") %>% pull(annotation_level_4new), ]$anno="Neuron"
+
+mat_df <-
+  mat_df%>% 
+  filter(anno!="") %>% 
+  group_by(anno) %>% 
+  summarise_all(.funs = sum)
+
+names <- mat_df$anno
+
+mat_df <- mat_df %>% select(-anno) %>% t() %>% as.data.frame()
+colnames(mat_df) <- names
+
+mat_df$anno=""
+mat_df[c("Microglia_IFN",
+         "Microglia_TREM2_IL6",
+         "Microglia_TREM2_STAT3",
+         "Microglia_PDL1_STAT3"), ]$anno="MG"
+mat_df[c("NPC_like_OPC",
+         "NPC_like_neural"), ]$anno="NPC"
+
+mat_df[c("OPC_like"), ]$anno="OPC-like"
+mat_df[c("AC_like"), ]$anno="AC_like"
+mat_df[c("Astrocyte"), ]$anno="Astrocyte"
+mat_df[c("OPC"), ]$anno="OPC"
+mat_df[c("Oligodendrocyte"), ]$anno="Oligodendrocyte"
+mat_df[colors %>% filter(annotation_level_2=="Neurons") %>% pull(annotation_level_4new), ]$anno="Neuron"
+
+mat_df <-
+  mat_df%>% 
+  filter(anno!="") %>% 
+  group_by(anno) %>% 
+  summarise_all(.funs = sum) %>% 
+  select(-anno) %>% 
+  as.matrix()
+
+rownames(mat_df) <- names
+
+
+# Remove self loops
+mat2 <- mat_df
+for(i in 1:nrow(mat2)){
+  for(j in 1:nrow(mat2)){
+  
+    if(i==j){mat2[i,j]=0}
+    
+}
+}
+mat2 = mat2^2
+mat2[mat_df<quantile(mat2, 0.3)]=0   
+
+netVisual_circle(mat2, 
+                 weight.scale = T, 
+                 vertex.weight=5,
+                 edge.width.max = 0.5,
+                 edge.weight.max = mean(mat2), 
+                 title.name = rownames(mat2)[i])
+
+
+
+
+
+for (i in 22:39) {
+  mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+
+
+
+microglia = 31:39
+Neuron = which(rownames(mat) %in% c(colors %>% filter(annotation_level_2=="Neurons") %>% pull(annotation_level_4_new)))
+tumor = which(rownames(mat) %in% c(colors %>% filter(annotation_level_2 %in% c("Differentiated-like", "Stem-like")) %>% pull(annotation_level_4_new)))
+glial = which(rownames(mat) %in% c(colors %>% filter(annotation_level_2 %in% c("Glial-Neuronal")) %>% pull(annotation_level_4_new)))
+  
+rownames(mat)[microglia]
+
+mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+target = "Microglia_TREM2_STAT3"
+mat2[target, ] <- mat[target, ]
+mat2 <- mat2[c(which(rownames(mat)==target),Neuron,glial,tumor), c(which(rownames(mat)==target),Neuron,glial,tumor)]
+mat2[which(rownames(mat2)==target),which(rownames(mat2)==target)]=0
+
+## Scale and filter
+mat2 = mat2^10
+mat2[mat2<quantile(mat2[1,], 0.5)]=0   
+
+netVisual_circle(mat2, weight.scale = T, edge.weight.max = max(mat2), title.name = rownames(mat2)[i])
+
+## look into the interactions
+netVisual_bubble(cellchat, sources.use = which(rownames(mat)==target), targets.use = c(Neuron,glial,tumor), remove.isolate = FALSE)
+
+```
+
+
+## Tumor to Microglia
+```{r}
+microglia = 31:39
+Neuron = which(rownames(mat) %in% c(colors %>% filter(annotation_level_2=="Neurons") %>% pull(annotation_level_4_new)))
+tumor = which(rownames(mat) %in% c(colors %>% filter(annotation_level_2 %in% c("Differentiated-like", "Stem-like")) %>% pull(annotation_level_4_new)))
+glial = which(rownames(mat) %in% c(colors %>% filter(annotation_level_2 %in% c("Glial-Neuronal")) %>% pull(annotation_level_4_new)))
+  
+rownames(mat)[tumor]
+rownames(mat)[microglia]
+
+mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+target = "NPC_like_neural"
+mat2[target, ] <- mat[target, ]
+mat2 <- mat2[c(which(rownames(mat)==target),Neuron,glial,microglia), c(which(rownames(mat)==target),Neuron,glial,microglia)]
+mat2[which(rownames(mat2)==target),which(rownames(mat2)==target)]=0
+
+## Scale and filter
+mat2 = mat2^5
+mat2[mat2<quantile(mat2[1,], 0.5)]=0   
+
+mat2[1,25:26] <- mat2[1,25:26]+c(0.03, 0.05)
+
+netVisual_circle(mat2, weight.scale = T, edge.weight.max = max(mat2), title.name = rownames(mat2)[i])
+
+## look into the interactions
+netVisual_bubble(cellchat, sources.use = which(rownames(mat)==target), targets.use = c(glial,microglia[8:9]), remove.isolate = FALSE)
+
+
+p = netVisual_bubble(cellchat, sources.use = tumor, targets.use = c(microglia), remove.isolate = FALSE)
+
+OR = p$data$receptor %>% unique() %>% na.omit() %>% map(., ~str_split(.x, "_") %>% unlist()) %>% unlist() %>% unique()
+
+OR <- c(OR, "IFNAR", "IFNGR", "CSF1R", "PDGFR", "IL2R","PRLR", "GHR", "IL6R","IL4R", "STAT1", "STAT3", "STAT5", "STAT6", "CD40", "CSF2RB", "CSF2RA")
+
+```
+
+
+## Overrepresentation Analysis:
+```{r}
+library(DOSE)
+library(enrichplot)
+library(clusterProfiler)
+
+
+GEO = clusterProfiler::enrichGO(OR, ont ="ALL", keyType = "SYMBOL", OrgDb = "org.Hs.eg.db")
+dotplot(GEO, showCategory=20)
+
+KEGG = clusterProfiler::enrichKEGG(bitr(OR,fromType = "SYMBOL",toType = "ENTREZID",OrgDb = "org.Hs.eg.db")$ENTREZID)
+dotplot(KEGG, showCategory=10)+
+  scale_color_gradientn(colors=viridis::inferno(50))+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+ptm = Sys.time()
+
+cellchat <- computeNetSimilarityPairwise(cellchat, type = "functional")
+cellchat <- netEmbedding(cellchat, type = "functional")
+future::plan("multisession", workers = 4) 
+cellchat <- netClustering(cellchat, type = "functional", do.parallel = F)
+netVisual_embeddingPairwise(cellchat, type = "functional", label.size = 3.5)
+
+```
+
+
+
+
+```{r}
+
+cellchat_sub <- object.list[[4]]
+names(object.list)
+ptm = Sys.time()
+groupSize <- as.numeric(table(cellchat_sub@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_circle(cellchat_sub@net$count, 
+                 vertex.weight = groupSize, 
+                 weight.scale = T, 
+                 label.edge= F, 
+                 title.name = "Number of interactions")
+
+
+netVisual_circle(cellchat_sub@net$weight, 
+                 vertex.weight = groupSize, 
+                 weight.scale = T, 
+                 label.edge= F, 
+                 title.name = "Interaction weights/strength")
+
+
+```
+
+
+```{r}
+mat <- cellchat_sub@net$weight
+par(mfrow = c(2,2), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+  mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+```
+
+```{r}
+# Heatmap
+pathways.show <- c("CXCL")
+par(mfrow=c(1,1))
+#netVisual_heatmap(cellchat)
+netVisual_heatmap(cellchat, signaling = pathways.show)
+
+```
+
+```{r}
+# show all the significant interactions (L-R pairs) from some cell groups (defined by 'sources.use') to other cell groups (defined by 'targets.use')
+netVisual_bubble(cellchat, sources.use = 1, targets.use = c(5:11), remove.isolate = FALSE)
+```
+
+
+
+```{r}
+ls <- seurat@reductions$harmony@cell.embeddings
+c=c(seurat$summ_k %>% as.factor() %>% as.numeric())-1
+```
+
+## Create nice embedding:
+```{python}
+## get UMAP of the latent space:
+import numpy as np
+import umap
+
+def runSUMAP(data, target, training_rate=0.8, filename="fitter.sav"):
+  #target = r.numeric_labels
+  target = np.asarray(target)
+  masked_target = target.copy().astype(np.int8)
+  masked_target[np.random.choice(len(target), size=int(len(target)*training_rate), replace=False)] = -1
+  print("Run UMAP Fit")
+  fitter = umap.UMAP().fit(data, y=masked_target)
+  embedding = fitter.embedding_
+  return(embedding)
+
+
+embedding = runSUMAP(r.ls, r.c, training_rate=0.4)
+
+```
+
+
+```{r}
+
+emb = py$embedding
+rownames(emb) <- rownames(ls)
+colnames(emb) <- paste0("umap_", 1:2)
+
+seurat@reductions$umaplerarn <- Seurat::CreateDimReducObject(
+  embeddings = emb,
+  key = "umaplerarn_",
+  assay = "RNA"
+)
+
+color_MG <-  py$tab10_hex_colors %>% sample()
+
+seurat@misc$color_MG <- color_MG
+
+DimPlot(seurat, group.by = "summ_k", label=T, pt.size=5, reduction = "umaplerarn", raster = T, raster.dpi = c(1024, 1024))+
+  scale_color_manual(values = color_MG)
+
+
+seurat %>% Seurat::FeaturePlot("AIF1",reduction = "umaplerarn")
+seurat %>% Seurat::FeaturePlot("TMEM119",reduction = "umaplerarn")
+seurat %>% Seurat::FeaturePlot("CD68", reduction = "umaplerarn")
+seurat %>% Seurat::FeaturePlot("CD163", reduction = "umaplerarn")
+seurat %>% Seurat::FeaturePlot("AIF1", reduction = "umaplerarn")
+
+seurat %>% Seurat::FeaturePlot("AIF1")
+seurat %>% Seurat::FeaturePlot("TMEM119")
+seurat %>% Seurat::FeaturePlot("CD68")
+seurat %>% Seurat::FeaturePlot("CD163")
+seurat %>% Seurat::FeaturePlot("AIF1")
+
+
+```
+
+
+
+
+
+
+## scpy
+
+```{r}
+files = dir("<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/adata", full.names = T, recursive=T, include.dirs = T)
+
+samples <- 
+  files %>% 
+  str_remove(., ".h5ad") %>% 
+  str_remove(., "<USER_HOME>/Desktop/ElectroGenomics/Data/Microglia/adata/")
+
+```
+
+
+store the datasets as adata 
+
+```{python}
+import scanpy as sc
+# Load and preprocess each sample
+adata_files = r.files
+adata_list = []
+
+for h5ad in adata_files:
+    adata = sc.read_h5ad(h5ad)
+    adata.layers["counts"] = adata.X.copy()
+    sc.pp.filter_cells(adata, min_genes=200)
+    sc.pp.filter_genes(adata, min_cells=3)
+    sc.pp.normalize_total(adata, target_sum=1e4)
+    sc.pp.log1p(adata)
+    adata_list.append(adata)
+adata_list[1]
+len(adata_list)
+
+
+```
+
+```{python}
+import scvi
+import anndata as ad
+import pandas as pd
+import numpy as np
+import anndata as ad
+
+
+all_sample = np.asarray(r.samples)
+
+for i, adata in enumerate(adata_list):
+    adata.var_names_make_unique()
+    adata.X = adata.layers["counts"]
+
+# Ensure uniqueness of cell barcodes across samples by appending sample names to barcodes
+for i, adata in enumerate(adata_list):
+    sample_name = f"all_sample_{i}"  # Create a unique sample identifier
+    adata.obs_names = [f"{bc}_{sample_name}" for bc in adata.obs_names]
+
+# Merge all samples using the new concat method
+adata_combined = ad.concat(adata_list, axis=0, join='outer', label='batch', keys=range(len(adata_list)), index_unique='-')
+adata_combined.layers["counts"] = adata_combined.X.copy()
+
+
+# Setup SCVI for batch correction
+scvi.model.SCVI.setup_anndata(adata_combined, batch_key='batch')
+
+# Train SCVI model for integration
+model = scvi.model.SCVI(adata_combined, n_latent=50)
+model.train(accelerator = "cpu", max_epochs=200, early_stopping=True)
+
+# Use the trained model to get the corrected latent space
+adata_combined.obsm["X_scVI"] = model.get_latent_representation()
+sc.pp.neighbors(adata_combined, use_rep="X_scVI")
+sc.tl.umap(adata_combined)
+
+sc.pl.umap(adata_combined, color=['batch'])
+
+
+## save model
+model.save("<USER_HOME>/Desktop/ElectroGenomics/July_2024/scVI/Model_ep250")
+adata_combined.write_h5ad("<USER_HOME>/Desktop/ElectroGenomics/July_2024/scVI/Model_ep50/adata.h5ad")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

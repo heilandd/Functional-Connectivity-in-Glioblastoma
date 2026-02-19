@@ -1,0 +1,2140 @@
+<!--
+NOTE (repository version):
+- Personal identifiers and machine-specific absolute paths have been removed.
+- Please set `PROJECT_ROOT` / input paths to point to your local data folder (e.g., `data/`).
+-->
+
+---
+title: "Analysis Figure 2: Connectomic signature and spatial transcriptomics"
+output: pdf_document
+date: "2025-12-08"
+editor_options: 
+  chunk_output_type: console
+---
+
+# Load spatial/GBMap-single cell/TCGA:
+Load the required packages
+```{r}
+reticulate::use_condaenv("Single_cell")
+## Load Library
+library(SPATA2)
+library(Seurat)
+library(reticulate)
+library(tidyverse)
+library(igraph)
+library(kableExtra)
+library(igraph)
+library(readxl)
+
+root = "<USER_HOME>/Desktop/OP-Planung/Analysis/RNA_seq_all"
+top_connected <- readRDS(paste0(root, "/top_connected.RDS"))
+
+## Import data
+source("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/import.R")
+#source("<USER_HOME>/Desktop/MERFISH/EcoFoundation/R_Functions/Deconvolution.R")
+#source("<USER_HOME>/Desktop/MERFISH/EcoFoundation/R_Functions/Converter.R")
+#source("<USER_HOME>/Desktop/MERFISH/EcoFoundation/R_Functions/utils.R")
+#source("<USER_HOME>/Desktop/MERFISH/EcoFoundation/R_Functions/plot.R")
+
+#TCGA <-  importTCGA()
+Spatial = importSpatial()
+#scRNA = importGBMap()
+
+## Import colors
+pycolors <- importPyColors()
+
+## Load source files (R functions)
+#source("<USER_HOME>/Library/CloudStorage/<CONTACT_EMAIL>/Meine Ablage/Tutorials/NeuroPhysiology/mea_functions.R")
+#source("<USER_HOME>/Library/CloudStorage/<CONTACT_EMAIL>/Meine Ablage/Tutorials/NeuroPhysiology/MEA_run.R")
+```
+
+## ------------------------------ Single Cell Load Omars_single cell and plot connectivity signature:
+```{python}
+import scanpy as sc
+#import tangram as tg
+#import anndata as ad
+#import squidpy as sq
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import matplotlib
+import matplotlib.pyplot as plt
+matplotlib.use("pdf")  
+from matplotlib import rcParams
+rcParams["font.family"] = "Helvetica"
+rcParams["pdf.fonttype"] = 42  
+
+def saveRasterized(fig, path, dpi=300):
+  # Get the current figure
+  # Rasterize all scatter plot artists
+  for ax in fig.axes:
+      for artist in ax.collections:
+          artist.set_rasterized(True)
+
+  # Save as vector PDF with raster scatter
+  fig.savefig(path, dpi=dpi, bbox_inches="tight")
+
+import sys
+sys.path.append("<USER_HOME>/Desktop/Cooperations/Adam_Sonication/Adam_RProject/")
+#from helper_Graph import *
+#from helper_R_L import *
+from helper_XeniumAnalysis import *
+figures = "<USER_HOME>/Desktop/OP-Planung/Analysis/RNA_seq_all/Figures"
+adata_gb = sc.read_h5ad("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBM_space_snRNA_processed.h5ad")
+
+count_categories(adata_gb, "annotation_coarse")
+
+connectivity_sig = np.asarray(r.top_connected.index)
+
+sc.tl.score_genes(
+    adata_gb,
+    gene_list=connectivity_sig,
+    score_name="connectivity_score",
+    use_raw=True  # if raw contains normalized data
+)
+
+ax = sc.pl.umap(
+    adata_gb,
+    color="connectivity_score",
+    cmap="magma",  # or "viridis" / "plasma" / "inferno"
+    vmin=np.percentile(adata_gb.obs["connectivity_score"], 1),
+    vmax=np.percentile(adata_gb.obs["connectivity_score"], 99),
+    edges=False,
+    size=10,
+    return_fig=True
+)
+
+saveRasterized(ax, path=f'{figures}/UMAP_connectivity_score.pdf')
+
+import pandas as pd
+
+df = adata_gb.obs[["connectivity_score", "annotation_coarse"]].dropna()
+
+celltype_stats = (
+    df
+    .groupby("annotation_coarse")["connectivity_score"]
+    .agg(["mean", "median", "std", "count"])
+    .sort_values("mean", ascending=False)
+)
+
+print(celltype_stats)
+
+import statsmodels.formula.api as smf
+
+df_mixed = adata_gb.obs[["connectivity_score", "annotation_granular", "sample"]].dropna()
+
+# choose a reference cell type (first factor level becomes reference)
+df_mixed["annotation_granular"] = df_mixed["annotation_granular"].astype("category")
+
+model = smf.mixedlm(
+    "connectivity_score ~ C(annotation_granular)",
+    df_mixed,
+    groups=df_mixed["sample"]
+)
+res = model.fit()
+print(res.summary())
+
+coef_table = res.summary().tables[1] 
+coef_sorted = coef_table.sort_values("Coef.", ascending=False)
+print(coef_sorted)
+
+
+### Analysis of GRIN1 KCC2 NKCC1
+
+#NKCC1: SLC12A2
+ax = sc.pl.umap(
+    adata_gb,
+    color="SLC12A2",
+    cmap="magma",  # or "viridis" / "plasma" / "inferno"
+    edges=False,
+    size=10,
+    vmax = 30,
+    return_fig=True
+)
+plt.show()
+saveRasterized(ax, path=f'{figures}/UMAP_connectivity_score.pdf')
+
+neuron_types = ["Neurons (Exc)", "Neurons (Inh)"]
+adata_neurons = adata_gb[adata_gb.obs["annotation_coarse"].isin(neuron_types)].copy()
+del adata_neurons.uns["annotation_granular_colors"]
+ax = sc.pl.umap(
+    adata_neurons,
+    color="SLC12A2",
+    cmap="magma",  # or "viridis" / "plasma" / "inferno"
+    edges=False,
+    size=20,
+    vmax = 10,
+    return_fig=True
+)
+plt.show()
+saveRasterized(ax, path=f'{figures}/UMAP_Neurons_NKCC1.pdf')
+
+ax = sc.pl.umap(
+    adata_neurons,
+    color="annotation_granular",
+    edges=False,
+    size=20,
+    vmax = 10,
+    return_fig=True
+)
+plt.show()
+saveRasterized(ax, path=f'{figures}/UMAP_Neurons_Celltype.pdf')
+
+
+
+
+import statsmodels.formula.api as smf
+adata_neurons.obs["NKCC1"] = np.array(
+    adata_neurons[:, "SLC12A2"].X.toarray().flatten()
+)
+df_mixed = adata_neurons.obs[["NKCC1", "annotation_granular", "sample"]].dropna()
+df_mixed["annotation_granular"] = df_mixed["annotation_granular"].astype("category")
+
+# choose a reference cell type (first factor level becomes reference)
+df_mixed["annotation_granular"] = df_mixed["annotation_granular"].astype("category")
+
+model = smf.mixedlm(
+    "NKCC1 ~ C(annotation_granular)",
+    df_mixed,
+    groups=df_mixed["sample"]
+)
+res = model.fit()
+print(res.summary())
+
+coef_table = res.summary().tables[1] 
+coef_sorted = coef_table.sort_values("Coef.", ascending=False)
+print(coef_sorted)
+
+nk_summary = (
+    adata_neurons.obs
+    .groupby("annotation_granular")["NKCC1"]
+    .agg(["mean", "median", "std", "count"])
+    .sort_values("mean", ascending=False)
+)
+nk_summary
+
+
+wnk_spak_signature = [
+    # Core kinases
+    "WNK1", "WNK2", "WNK3", "WNK4",
+    
+    # Downstream kinases
+    "STK39",     # SPAK
+    "OXSR1",     # OSR1
+
+    # NKCC/NCC transporters (activated by SPAK/OSR1 phosphorylation)
+    "SLC12A2",   # NKCC1
+    "SLC12A1",   # NKCC2
+    "SLC12A3",   # NCC
+
+    # KCC transporters (inhibited by WNK–SPAK signaling)
+    "SLC12A4",   # KCC1
+    "SLC12A5",   # KCC2
+    "SLC12A6",   # KCC3
+    "SLC12A7",   # KCC4
+
+    # Chloride homeostasis regulators
+    "CLCN3", "CLCN5", "CLIC1",
+
+    # Upstream regulators of WNK/SPAK activation
+    "WNK1B",     # neuronal isoform if present
+    "NEDD4L",    # regulates NCC/NKCC trafficking
+    "CSNK2A1",   # CK2: required for WNK activation
+    "CUL3",      # Cullin3 → WNK ubiquitination complex
+    "KLHL3",     # substrate adaptor for WNK degradation
+]
+
+sc.tl.score_genes(
+    adata_neurons,
+    gene_list=wnk_spak_signature,
+    score_name="wnk_spak_signature",
+    use_raw=True  # if raw contains normalized data
+)
+
+ax = sc.pl.umap(
+    adata_neurons,
+    color="wnk_spak_signature",
+    cmap="magma",  # or "viridis" / "plasma" / "inferno"
+    vmin=np.percentile(adata_neurons.obs["wnk_spak_signature"], 1),
+    vmax=np.percentile(adata_neurons.obs["wnk_spak_signature"], 99),
+    edges=False,
+    size=15,
+    return_fig=True
+)
+plt.show()
+saveRasterized(ax, path=f'{figures}/UMAP_Neurons_wnk_spak_signature.pdf')
+
+df_mixed = adata_neurons.obs[["wnk_spak_signature", "annotation_granular", "sample"]].dropna()
+df_mixed["annotation_granular"] = df_mixed["annotation_granular"].astype("category")
+
+# choose a reference cell type (first factor level becomes reference)
+df_mixed["annotation_granular"] = df_mixed["annotation_granular"].astype("category")
+
+model = smf.mixedlm(
+    "wnk_spak_signature ~ C(annotation_granular)",
+    df_mixed,
+    groups=df_mixed["sample"]
+)
+res = model.fit()
+print(res.summary())
+
+coef_table = res.summary().tables[1] 
+coef_sorted = coef_table.sort_values("Coef.", ascending=False)
+print(coef_sorted)
+
+
+```
+
+```{r}
+
+library(dplyr)
+library(stringr)
+library(tibble)
+
+clean_df_WNK <- py$coef_sorted %>%
+  as.data.frame() %>%
+  rownames_to_column("ID") %>%
+  mutate(
+    clean_label = str_replace(ID, "C\\(annotation_granular\\)\\[T\\.", ""),
+    clean_label = str_replace(clean_label, "\\]", "")
+  ) %>% 
+  filter(!ID %in% c("Intercept", "Group Var"))
+
+clean_df_NKCC2 <- py$coef_sorted %>%
+  as.data.frame() %>%
+  rownames_to_column("ID") %>%
+  mutate(
+    clean_label = str_replace(ID, "C\\(annotation_granular\\)\\[T\\.", ""),
+    clean_label = str_replace(clean_label, "\\]", "")
+  ) %>% 
+  filter(!ID %in% c("Intercept", "Group Var"))
+
+
+clean_df_WNK$type = "WNK"
+clean_df_NKCC2$type = "NKCC2"
+
+
+plot_df <- rbind(clean_df_WNK, clean_df_NKCC2)
+
+# 1. create unique order of labels by average coefficient OR by WNK or NKCC rank
+label_order <- plot_df %>%
+  filter(type!="NKCC2") %>% 
+  arrange(Coef.) %>%
+  pull(clean_label)
+
+# 2. apply this order as factor levels
+plot_df <- plot_df %>%
+  mutate(clean_label = factor(clean_label, levels = label_order))
+
+plot_df$clean_label <- str_replace_all(plot_df$clean_label, "-", " ")
+
+ggplot(plot_df, aes(x = clean_label, y = as.numeric(Coef.), fill = type, size = Coef.)) +
+  geom_point(shape = 21 , color = "black") +
+  scale_fill_manual(values = c("WNK" = "#F8766D", "NKCC2" = "#619CFF")) +
+  labs(
+    x = "",
+    y = "Coefficient (Mixed Effects Model)",
+    fill = "Signature",
+    title = "WNK–SPAK and NKCC1/NKCC2 Enrichment Across Neuronal Subtypes"
+  ) +
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black", angle=90, hjust=1),
+          axis.text.y = element_text(colour="black"))
+
+
+```
+
+
+
+
+## ------------------------------ Spatial Data Analyis
+```{r}
+reticulate::use_condaenv("cell2loc_mps")
+## Load Library
+library(SPATA2)
+library(Seurat)
+library(reticulate)
+library(tidyverse)
+library(igraph)
+library(kableExtra)
+library(igraph)
+library(readxl)
+
+root = "<USER_HOME>/Desktop/OP-Planung/Analysis/RNA_seq_all"
+top_connected <- readRDS(paste0(root, "/top_connected.RDS"))
+
+## Import data
+source("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/import.R")
+#source("<USER_HOME>/Desktop/MERFISH/EcoFoundation/R_Functions/Deconvolution.R")
+#source("<USER_HOME>/Desktop/MERFISH/EcoFoundation/R_Functions/Converter.R")
+#source("<USER_HOME>/Desktop/MERFISH/EcoFoundation/R_Functions/utils.R")
+#source("<USER_HOME>/Desktop/MERFISH/EcoFoundation/R_Functions/plot.R")
+
+#TCGA <-  importTCGA()
+Spatial = importSpatial()
+#scRNA = importGBMap()
+
+## Import colors
+pycolors <- importPyColors()
+
+## Load source files (R functions)
+#source("<USER_HOME>/Library/CloudStorage/<CONTACT_EMAIL>/Meine Ablage/Tutorials/NeuroPhysiology/mea_functions.R")
+#source("<USER_HOME>/Library/CloudStorage/<CONTACT_EMAIL>/Meine Ablage/Tutorials/NeuroPhysiology/MEA_run.R")
+
+
+
+```
+
+
+```{python}
+from spatialdata import read_zarr
+import scanpy as sc
+import pandas as pd
+import numpy as np
+import squidpy as sq
+import numpy as np
+root = "<USER_HOME>/Desktop/Cooperations/Essen_proBcells/Analysis"
+figures = "<USER_HOME>/Desktop/OP-Planung/Analysis/RNA_seq_all/Figures"
+
+adata_vis = sq.read.visium("<USER_HOME>/Desktop/RecurrentGBM/Data/269_T/outs")
+adata_vis.var_names_make_unique()
+sq.pl.spatial_scatter(adata_vis, color="GFAP")
+plt.show()
+
+## Add connectivity signature
+
+connectivity_sig = np.asarray(r.top_connected.index)
+
+sc.tl.score_genes(
+    adata_vis,
+    gene_list=connectivity_sig,
+    score_name="connectivity_score"
+)
+sq.pl.spatial_scatter(adata_vis, color="connectivity_score");plt.show()
+
+
+```
+
+## Create spatial plots:
+```{python}
+from cell2location.plt import plot_spatial
+import os
+import matplotlib
+import matplotlib.pyplot as plt
+matplotlib.use("pdf")  
+from matplotlib import rcParams
+rcParams["font.family"] = "Helvetica"
+rcParams["pdf.fonttype"] = 42  
+
+def saveRasterized(fig, path, dpi=300):
+  # Get the current figure
+  # Rasterize all scatter plot artists
+  for ax in fig.axes:
+      for artist in ax.collections:
+          artist.set_rasterized(True)
+
+  # Save as vector PDF with raster scatter
+  fig.savefig(path, dpi=dpi, bbox_inches="tight")
+
+
+
+
+# Directory containing the h5ad files
+data_dir = "<USER_HOME>/Desktop/RecurrentGBM/Data/GBM_all"
+files = [f for f in os.listdir(data_dir) if f.endswith("_adata_annotated.h5ad")]
+files = sorted(files)  # optional but helpful for reproducibility
+
+adatas = []  # to store each loaded object
+IDs = []
+
+for f in files:
+    path = os.path.join(data_dir, f)
+    sample = f.replace("_adata_annotated.h5ad", "")
+    IDs.append(sample)
+    adata = sc.read_h5ad(path)
+    adata.obs["sample"] = sample
+    adata.obs["file_id"] = f
+    adatas.append(adata)
+
+print(f"Loaded {len(adatas)} samples.")
+
+i=24
+print(IDs[i])
+adata_vis = adatas[i]
+adata_vis.obs[adata_vis.uns['mod']['factor_names']] = adata_vis.obsm["q05_cell_abundance_w_sf"]
+adata_vis.obsm["q05_cell_abundance_w_sf"].columns
+clust_labels = ['NPC-neuronal-like', 'Astrocytes', 'Neurons (Exc)', 'Neurons (Inh)', 'Gliosis-like', 'Hypoxic']
+clust_col = ['' + str(i) for i in clust_labels]
+sc.tl.score_genes(
+    adata_vis,
+    gene_list=connectivity_sig,
+    score_name="connectivity_score"
+)
+sq.pl.spatial_scatter(adata_vis, color="connectivity_score", vmin = -0, vmax = 0.2);plt.show()
+saveRasterized(plt.gcf(), f'{figures}/{IDs[i]}_connectivity_score.pdf')
+plot_spatial(adata=adata_vis,
+      color=clust_col, 
+      labels=clust_labels,
+      show_img=True,
+      style='fast',
+      max_color_quantile=0.992,
+      circle_diameter=4,
+      colorbar_position='right'
+  )
+plt.show()
+saveRasterized(plt.gcf(), f'{figures}/{IDs[i]}_spatial_cells.pdf')
+
+
+
+## Statistical testing: 
+
+
+import numpy as np
+import pandas as pd
+from scipy.spatial import KDTree
+
+def spatial_coloc_test_all_celltypes(
+    adata,
+    celltypes,
+    score_key="connectivity_score",
+    radius=100,
+    n_perm=2000
+):
+    """
+    Spatial co-localisation test between each cell type abundance
+    and a continuous signature (e.g., connectivity score) in a Visium dataset.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Visium AnnData object with .obsm["spatial"] and cell type abundances in .obs.
+    celltypes : list
+        List of obs-column names with cell-type abundance values.
+    score_key : str
+        obs-column with continuous signature score.
+    radius : float
+        Neighborhood radius (Visium spot ~55 µm → 100 µm is common).
+    n_perm : int
+        Number of permutations.
+
+    Returns
+    -------
+    pd.DataFrame
+        columns: cell_type, observed, p_value, effect_size, n_perm
+    """
+
+    coords = adata.obsm["spatial"]
+    tree = KDTree(coords)
+    neighbors = tree.query_ball_tree(tree, r=radius)
+
+    # Preload connectivity values
+    conn = adata.obs[score_key].values
+
+    results = []
+
+    for ct in celltypes:
+        if ct not in adata.obs.columns:
+            print(f"Warning: cell type {ct} not found; skipping.")
+            continue
+
+        abund = adata.obs[ct].values
+
+        # -------- Observed statistic --------
+        obs_vals = []
+        for i in range(len(coords)):
+            neigh_idx = neighbors[i]
+            obs_vals.append(np.mean(abund[neigh_idx] * conn[neigh_idx]))
+        observed = np.mean(obs_vals)
+
+        # -------- Permutations --------
+        perm_stats = []
+        for _ in range(n_perm):
+            perm_conn = np.random.permutation(conn)
+            vals = []
+            for i in range(len(coords)):
+                neigh_idx = neighbors[i]
+                vals.append(np.mean(abund[neigh_idx] * perm_conn[neigh_idx]))
+            perm_stats.append(np.mean(vals))
+
+        perm_stats = np.array(perm_stats)
+
+        # permutation p-value (one-sided: enrichment)
+        p_value = np.mean(perm_stats >= observed)
+
+        # standardized effect size
+        effect = (observed - np.mean(perm_stats)) / (np.std(perm_stats) + 1e-9)
+
+        results.append({
+            "cell_type": ct,
+            "observed": observed,
+            "p_value": p_value,
+            "effect_size_z": effect,
+            "n_perm": n_perm
+        })
+
+    return pd.DataFrame(results)
+
+
+celltypes = adata_gb.obs["annotation_coarse"].values.unique()
+
+res_df = spatial_coloc_test_all_celltypes(
+    adata_vis,
+    celltypes,
+    score_key="connectivity_score",
+    radius=100,
+    n_perm=100
+)
+
+print(res_df.sort_values("p_value"))
+
+
+
+
+
+```
+
+
+## ------------------------------ Electrogenomics
+```{r}
+reticulate::use_condaenv("cell2loc_mps")
+library(readxl)
+library(patchwork)
+library(tidyverse)
+library(SPATA2)
+library(igraph)
+root_out = "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/Analysis_DHH"
+root_SPATA = "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/data/proc"
+root_MEA = "<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/UKA_MEA/"
+meta <- readRDS("<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Electrogenomics_newdata/Analysis_DHH/Meta.RDS")
+meta[,2] <- str_replace_all(meta[,2], "dieterhenrikheiland", "<REDACTED>")
+meta[,3] <- str_replace_all(meta[,3], "dieterhenrikheiland", "<REDACTED>")
+meta[,5] <- str_replace_all(meta[,5], "dieterhenrikheiland", "<REDACTED>")
+meta[,6] <- str_replace_all(meta[,6], "dieterhenrikheiland", "<REDACTED>")
+meta[,7] <- str_replace_all(meta[,7], "dieterhenrikheiland", "<REDACTED>")
+meta[,8] <- str_replace_all(meta[,8], "dieterhenrikheiland", "<REDACTED>")
+meta$spata2_new <- paste0(root_out, "/", meta$samples, "_spata2.RDS")
+
+root = "<USER_HOME>/Desktop/OP-Planung/Analysis/RNA_seq_all"
+top_connected <- readRDS(paste0(root, "/top_connected.RDS"))
+
+
+colors <- readRDS("<USER_HOME>/Desktop/RecurrentGBM/SingleCellRef/GBM_Neuron_colors.RDS")
+colors$annotation_level_4_new <- 
+  colors$annotation_level_4 %>% 
+  str_replace_all(., "-", "_") %>% 
+  str_replace_all(., " ", "_") %>% 
+  str_replace_all(., "/", "_")
+
+
+
+```
+
+## Transfer lables and colors:
+```{r}
+
+library(dplyr)
+
+granular_to_coarse <- c(
+  # Tumor / glial-like
+  "AC_like"                      = "AC-progenitor-like",
+  "AC_like_Prolif"               = "Proliferative",
+  "MES_like_hypoxia_independent" = "Hypoxic",
+  "MES_like_hypoxia_MHC"         = "Hypoxic",
+  "NPC_like_OPC"                 = "OPC-NPC-like",
+  "NPC_like_Prolif"              = "Proliferative",
+  "NPC_like_neural"              = "NPC-neuronal-like",
+  "OPC_like"                     = "OPC-like",
+  "OPC_like_Prolif"              = "Proliferative",
+
+  # Myeloid / macrophage / DC
+  "Mast"                         = "Myeloid",
+  "Mono_anti_infl"               = "Myeloid",
+  "Mono_hypoxia"                 = "Myeloid",
+  "Mono_naive"                   = "Myeloid",
+  "TAM_BDM_INF"                  = "Myeloid",
+  "TAM_BDM_MHC"                  = "Myeloid",
+  "TAM_BDM_anti_infl"            = "Myeloid",
+  "TAM_BDM_hypoxia_MES"          = "Myeloid",
+  "TAM_MG_aging_sig"             = "Myeloid",
+  "TAM_MG_pro_infl_I"            = "Myeloid",
+  "TAM_MG_pro_infl_II"           = "Myeloid",
+  "TAM_MG_prolif"                = "Myeloid",
+  "DC1"                          = "Myeloid",
+  "DC2"                          = "Myeloid",
+  "DC3"                          = "Myeloid",
+  "cDC1"                         = "Myeloid",
+  "cDC2"                         = "Myeloid",
+  "pDC"                          = "Myeloid",
+
+  # Vascular / stromal
+  "Endo_arterial"                = "Vascular-associated",
+  "Endo_capilar"                 = "Vascular-associated",
+  "Pericyte"                     = "Vascular-associated",
+  "Perivascular_fibroblast"      = "Vascular-associated",
+  "SMC"                          = "Vascular-associated",
+  "SMC_COL"                      = "Vascular-associated",
+  "SMC_prolif"                   = "Vascular-associated",
+  "Scavenging_endothelial"       = "Vascular-associated",
+  "Scavenging_pericyte"          = "Vascular-associated",
+  "Tip_like"                     = "Vascular-associated",
+  "VLMC"                         = "Vascular-associated",
+
+  # Canonical CNS glia
+  "Astrocyte"                    = "Astrocytes",
+  "OPC"                          = "OPCs",
+  "Oligodendrocyte"              = "Oligodendrocytes",
+  "RG"                           = "AC-progenitor-like",  # or NPC-neuronal-like if you prefer
+
+  # T / B / NK = lymphocytes
+  "NK"                           = "Lymphocytes",
+  "Prolif_T"                     = "Lymphocytes",
+  "Reg_T"                        = "Lymphocytes",
+  "CD8_EM"                       = "Lymphocytes",
+  "CD8_NK_sig"                   = "Lymphocytes",
+  "CD8_cytotoxic"                = "Lymphocytes",
+  "B_cell"                       = "Lymphocytes",
+  "Plasma_B"                     = "Lymphocytes",
+  "CD4_INF"                      = "Lymphocytes",
+  "CD4_rest"                     = "Lymphocytes",
+
+  # Stress / gliosis
+  "Stress_sig"                   = "Gliosis-like",
+
+  # Neurons – generic
+  "Neuron"                       = "Neurons (Exc)",
+
+  # Excitatory subtypes
+  "L2_3_IT"                      = "Neurons (Exc)",
+  "L5_ET"                        = "Neurons (Exc)",
+  "L5_IT"                        = "Neurons (Exc)",
+  "L5_6_NP"                      = "Neurons (Exc)",
+  "L6_CT"                        = "Neurons (Exc)",
+  "L6_IT"                        = "Neurons (Exc)",
+  "L6b"                          = "Neurons (Exc)",
+
+  # Inhibitory subtypes
+  "Lamp5"                        = "Neurons (Inh)",
+  "Pvalb"                        = "Neurons (Inh)",
+  "Sncg"                         = "Neurons (Inh)",
+  "Sst"                          = "Neurons (Inh)",
+  "Vip"                          = "Neurons (Inh)"
+)
+
+colors
+
+lable_exhange = granular_to_coarse %>% as.data.frame() %>% rownames_to_column("annotation_level_4_new")
+names(lable_exhange)[2] <- "annotation_coarse"
+
+cols_lab = data.frame(annotation_coarse = py$adata_gb$obs$annotation_coarse %>% levels(),
+                      colors = py$adata_gb$uns$annotation_coarse_colors)
+lable_exhange <- lable_exhange %>% left_join(., cols_lab)
+colors_new <- left_join(data.frame(annotation_level_4_new = colors$annotation_level_4_new), lable_exhange)
+colors$colors = colors_new$colors
+colors$annotation_coarse = colors_new$annotation_coarse
+
+```
+
+
+## Colors
+```{python}
+import matplotlib.pyplot as plt
+cmap = plt.get_cmap('tab20')
+tab20_colors = cmap.colors
+
+# Converting RGB colors to hexadecimal format
+def rgb_to_hex(rgb):
+    return "#{:02x}{:02x}{:02x}".format(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
+
+tab20_hex_colors = [rgb_to_hex(color) for color in tab20_colors]
+tab20_hex_colors
+
+cmap = plt.get_cmap('tab10')
+tab10_colors = cmap.colors
+
+# Converting RGB colors to hexadecimal format
+def rgb_to_hex(rgb):
+    return "#{:02x}{:02x}{:02x}".format(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
+
+tab10_hex_colors = [rgb_to_hex(color) for color in tab20_colors]
+tab10_hex_colors
+```
+
+Samples die keinen Tumor haben !!
+
+S24_06_CT_01_spata2
+S24_06_CT_02_spata2
+
+## Create SPATA files
+```{r}
+i=1
+for(i in 1:nrow(meta)){
+  
+  raw <- readRDS(meta$raw_data[i])
+  scale=1
+  object <- SPATA2::initiateSpataObject_CountMtr(coords_df = raw$coords,
+                                                 count_mtr=raw$counts,
+                                                 image = raw$image$mea_overlay_orient,
+                                                 sample_name = meta$samples[i]
+                                                 )
+  object <- object %>% flipImage(axis="h")
+  plotSurface(object)
+  
+  saveRDS(object, paste0(root_out, "/", meta$samples[i], "_spata2.RDS"))
+  
+}
+meta$spata2_new <- paste0(root_out, "/", meta$samples, "_spata2.RDS")
+
+
+## Add cytospace:
+for(i in 1:nrow(meta)){
+  object <- readRDS(meta$spata2_new[i])
+  object@spatial[[1]]$cytospace = readRDS(meta$cytospace[i])
+  object@spatial[[1]]$graph = readRDS(meta$graph[i])
+  saveRDS(object, paste0(root_out, "/", meta$samples[i], "_spata2.RDS"))
+
+}
+
+## Add c2l:
+for(i in 1:nrow(meta)){
+  object <- readRDS(meta$spata2_new[i])
+  output <- paste0(root_out, "/", meta$samples[i] ,"_deconv.csv")
+  cell_types <- read.csv(output)
+  names(cell_types)[1] <- "barcodes"
+  cell_types_df <- cell_types
+  names(cell_types_df) <- str_remove(names(cell_types_df), "q05cell_abundance_w_sf_")
+  names(cell_types_df) <- names(cell_types_df) %>% str_replace_all(., "[.]", "_")
+  object <- object %>% SPATA2::addFeatures(cell_types_df, overwrite = T)
+
+  saveRDS(object, paste0(root_out, "/", meta$samples[i], "_spata2.RDS"))
+
+}
+
+```
+
+
+## Plot Single cell and mea data:
+```{r}
+#Colors:
+cc <- colors$colors;names(cc) <- colors$annotation_level_4_new
+i=6
+object <- readRDS(meta$spata2_new[i])
+plotSurface(object)
+
+object@used_genesets = rbind(data.frame(ont = "connectivity", gene=top_connected$gene), object@used_genesets)
+
+limits=c(0.1, 0.8)
+p = plotSurface(object, color_by = "connectivity", alpha_by="connectivity", display_image=T, limits=limits, oob=scales::squish)+
+  scale_alpha(limits=limits,oob=scales::squish)
+p
+
+
+cell_types <- object@spatial[[1]]$cytospace
+s = plotSurface(object, pt_alpha=0)
+s
+
+library(ggforce)
+p=#ggplot()+
+  s+
+  geom_voronoi_tile(data =cell_types, mapping=aes(x=x_sc,y=y_sc, group = -1L, fill = CellType), 
+                      max.radius = 3, colour = 'black', linewidth=0.1, alpha=0.4)+
+    scale_fill_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")+
+  Seurat::NoLegend()
+p
+
+p=ggplot()+
+  geom_voronoi_tile(data =cell_types, mapping=aes(x=x_sc,y=y_sc, group = -1L, fill = CellType), 
+                      max.radius = 3, colour = 'black', linewidth=0.1, alpha=1)+
+    scale_fill_manual(values=cc)+
+    theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")+
+  Seurat::NoLegend()
+
+p
+
+## Add MEA Grid
+library(ggnewscale)
+nodes <- object@spatial[[1]]$graph$nodes
+edges <- object@spatial[[1]]$graph$edges
+
+cond <- nodes$drug %>% unique()
+drug_select = c(nodes$drug %>% unique())[1]
+weight_lim = 10
+
+n_inp = nodes[!is.na(nodes$drug), ] %>% filter(.$drug == drug_select)
+e_inp = edges %>% filter(.$drug==drug_select) %>% filter(weight>weight_lim)
+
+dim(e_inp)
+
+p+
+  ggnewscale::new_scale_color()+
+  geom_point(data = n_inp, mapping=aes(x=x,y=y,alpha=degree), size=1)+
+  geom_segment(data = e_inp %>% arrange(weight), 
+               mapping=aes(x=x,y=y,xend=xend,yend=yend, color =weight, alpha=weight, size=weight), alpha=0.1)+ 
+  scale_size(range=c(0.1,1.8))+
+  scale_color_viridis_c(option="B", 
+                        limits=c(0, 1000), 
+                        oob=scales::squish)
+
+ggplot()+
+  geom_point(data = n_inp, mapping=aes(x=x,y=y,alpha=degree), size=2, color="black")+
+  geom_segment(data = e_inp, 
+               mapping=aes(x=x,y=y,xend=xend,yend=yend, color =weight, alpha=weight, size=weight))+ 
+  scale_size(range=c(0.1,1))+
+  scale_color_viridis_c(option="B", limits=c(0.3, 0.7), oob=scales::squish)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))+
+    coord_fixed()+
+  theme(legend.text = element_text(size=6),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_text(size=8))+
+  xlab("Dimension x-space [cm]")+
+  ylab("Dimension y-space [cm]")
+
+```
+
+## KNN analysis
+```{r}
+#Colors:
+cc <- colors$colors;names(cc) <- colors$annotation_level_4_new
+i=6
+object <- readRDS(meta$spata2_new[i])
+plotSurface(object)
+nodes <- object@spatial[[1]]$graph$nodes
+edges <- object@spatial[[1]]$graph$edges
+
+## Get KNN cells of the MEA spots
+library(FNN)
+drug_select = c(nodes$drug %>% unique())[3]
+n_inp = 
+  nodes[!is.na(nodes$drug), ] %>% 
+  filter(.$drug == drug_select)
+
+#node_rank = n_inp %>% arrange(desc(degree)) %>% mutate(degree_rank=1:nrow(.)) %>% select(id, degree_rank)
+node_rank = n_inp %>% arrange(desc(nonrandom_spikes)) %>% mutate(degree_rank=1:nrow(.)) %>% select(id, degree_rank)
+
+
+query_points = data.frame(x=n_inp$x, y=n_inp$y)
+#data_points = data.frame(x=cell_types$x_sc, y=cell_types$y_sc)
+coords = SPATA2::getCoordsDf(object)
+data_points = data.frame(x=coords$x, y=coords$y)
+k <- 5
+
+# Find k-nearest neighbors of query_points in data_points
+knn_result <- get.knnx(data = data_points, query = query_points, k = k)
+index = knn_result$nn.index
+dist = knn_result$nn.dist   
+
+
+NN = map_dfr(1:nrow(index), .f=function(i){
+  print(i)
+  data.frame(
+    barcodes = coords$barcodes[i],
+    degree = n_inp$degree[index[i,]] %>% mean(na.rm=T),
+    random = n_inp$nonrandom_spikes[index[i,]]%>% mean(na.rm=T),
+    firing_rate = n_inp$firing_rate[index[i,]]%>% mean(na.rm=T)
+  )
+})
+
+object@used_genesets = rbind(data.frame(ont = "connectivity", gene=top_connected$gene), object@used_genesets)
+NN <- left_join(NN, joinWithGeneSets(object, gene_sets = "connectivity"), by="barcodes")
+
+
+
+
+ggplot(NN,mapping = aes(x=connectivity, y=degree))+geom_point()+
+  geom_smooth(se=F, method="lm")+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))
+
+cor.test(NN$degree, NN$connectivity)
+
+
+cell_types <- object@spatial[[1]]$cytospace
+NN = map_dfr(1:nrow(index), .f=function(i){
+  data.frame(
+    UniqueCID = cell_types$UniqueCID[index[i,]],
+    dist = dist[i,],
+    id = n_inp$id[i],
+    degree_rank = node_rank %>% filter(id==n_inp$id[i]) %>% pull(degree_rank) %>% mean(),
+    degree = n_inp$degree[i],
+    random = n_inp$nonrandom_spikes[i],
+    firing_rate = n_inp$firing_rate[i]
+  )
+})
+NN <- left_join(NN, cell_types, by="UniqueCID")
+NN <- left_join(NN, data.frame(CellType = colors$annotation_level_4_new, anno2 = colors$annotation_coarse))
+
+
+
+
+plot_df <- NN %>% group_by(degree_rank, anno2) %>% count()
+plot_df$anno2 <- factor(plot_df$anno2, levels = unique(colors$annotation_coarse))
+
+cc2 <- colors$colors;names(cc2) <- colors$annotation_coarse
+plot_df
+ggplot()+
+  geom_col(plot_df, mapping=aes(x=as.factor(degree_rank), y=n, fill=anno2), position = "fill")+
+  scale_fill_manual(values=cc2)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))
+
+
+
+plot_df <- plot_df %>% 
+                filter(anno2 %in% c("Neurons (Exc)", "Neurons (Inh)", "NPC-neuronal-like"))
+                #filter(degree_rank>100)
+
+ggplot()+
+  geom_smooth(plot_df, 
+              mapping=aes(x=degree_rank, y=n, color=anno2))+
+  scale_color_manual(values=cc2)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))
+
+
+plot_df <- plot_df
+ggplot()+
+  geom_smooth(plot_df, 
+              mapping=aes(x=degree_rank, y=n, color=anno2), se=F)+
+  scale_color_manual(values=cc2)+
+  theme_bw() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(colour = "black", size=0.5),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black"))
+
+```
+
+
+## Correlation of cell abundance and network parameter
+
+```{r}
+library(FNN)
+cc <- colors$colors;names(cc) <- colors$annotation_level_4_new
+getCellCor <- function(object, nodes, cell_types, k=2, drug_select, prams){
+
+  cells <- 
+    object %>% 
+    joinWithFeatures(features=cell_types)
+  
+  # subset drug
+  n_inp = 
+    nodes[!is.na(nodes$drug), ] %>% 
+    filter(.$drug == drug_select) %>% 
+    group_by(id,x,y) %>% 
+    select(id,x,y, {prams}) %>% 
+    summarise_all(.funs = mean)
+  
+  ggplot()+
+    geom_point(data = data.frame(x=cells$x, y=cells$y), mapping=aes(x,y))+
+    geom_point(data = n_inp[,c("x", "y")],mapping=aes(x,y), color="red")
+  
+  ## KNN
+  knn_result <- get.knnx(data = data.frame(x=cells$x, y=cells$y), query = n_inp[,c("x", "y")] , k = k)
+  
+  ## Summarize
+  NN = map_dfr(1:nrow(knn_result$nn.index), .f=function(i){
+      
+    cell_mat = 
+      cells[knn_result$nn.index[i,], cell_types] %>% colSums() %>% 
+      as.data.frame()
+    names(cell_mat)[1] <- "fraction"
+    cell_mat <- cell_mat %>% rownames_to_column("Cell_type")
+    
+    cell_mat <- 
+      cell_mat %>% 
+      mutate(
+        dist = mean(knn_result$nn.dist[i,]),
+        id = n_inp$id[i])
+      
+    return(cell_mat)
+})
+  NN <- NN %>% left_join(., n_inp, by="id")
+  
+  
+  ## run cor:
+  all = map_dfc(cell_types, .f=function(ct){
+    
+    inp=na.omit(NN)
+    cor_mat <- inp %>% 
+      filter(Cell_type==ct) %>%
+      select(fraction, {prams}) %>% 
+      cor()
+    out = cor_mat[1,] %>% as.data.frame()
+    names(out)=ct
+    return(out)
+  })
+  all <- all[-c(1), ]
+  return(all)
+}
+
+
+i=1
+for(i in 1:6){
+  print(i)
+  object <- readRDS(meta$spata2_new[i])
+  nodes <- object@spatial[[1]]$graph$nodes
+  edges <- object@spatial[[1]]$graph$edges
+  
+  all_drugs <- as.character(na.omit(nodes$drug %>% unique()))
+  
+  all_drugs_list = map(all_drugs, .f=function(drug_select){
+    prams <- names(nodes)[c(18:24, 27:46)]
+  cell_types <- names(cc)
+
+  all = getCellCor(object, nodes, cell_types, k=4, drug_select, prams)
+
+  all_sub <- 
+    all %>% t() %>% 
+    as.data.frame() %>% 
+    rownames_to_column("annotation_level_4_new") %>% 
+    left_join(., colors) %>% 
+    select(-annotation_level_4_new) %>% 
+    select(annotation_coarse, {prams}) %>% 
+    group_by(annotation_coarse) %>% 
+    summarise_all(.funs = mean) %>% 
+    as.data.frame()
+  })
+  names(all_drugs_list) <- all_drugs
+  
+  saveRDS(all_drugs_list, paste0(root_out, "/", meta$samples[i], "_cell_cor.RDS"))
+  
+  
+}
+
+
+
+matrix_list1 <- map(c(1:2, 5:6), .f=function(i){
+  all_sub <- readRDS(paste0(root_out, "/", meta$samples[i], "_cell_cor.RDS"))$nodrug 
+  rownames(all_sub) <- all_sub$annotation_coarse
+  #all_sub <- all_sub[,-c("firing_rate_whole_recording")]
+  all_sub <- all_sub[,-c(1,6)]
+  return(all_sub)
+  })
+
+matrix_list2 <- map(c(1:2, 5:6), .f=function(i){
+  all_sub <- readRDS(paste0(root_out, "/", meta$samples[i], "_cell_cor.RDS"))$`8mMK`
+  rownames(all_sub) <- all_sub$annotation_coarse
+  #all_sub <- all_sub[,-c("firing_rate_whole_recording")]
+  all_sub <- all_sub[,-c(1,6)]
+  return(all_sub)
+  })
+matrix_list3 <- map(c(1:2, 5:6), .f=function(i){
+  all_sub <- readRDS(paste0(root_out, "/", meta$samples[i], "_cell_cor.RDS"))$`5uMgabazine`
+  rownames(all_sub) <- all_sub$annotation_coarse
+  #all_sub <- all_sub[,-c("firing_rate_whole_recording")]
+  all_sub <- all_sub[,-c(1,6)]
+  return(all_sub)
+  })
+
+matrix_list <- matrix_list3
+all_sub <- Reduce("+", matrix_list) / length(matrix_list)
+all_sub <- all_sub[colors$annotation_coarse %>% unique(), ] %>% t()
+mat = all_sub[c("degree_centrality", "firing_rate", "nonrandom_spikes"),] %>% t() %>% na.omit()
+
+pheatmap::pheatmap(mat,
+                   cluster_rows = T, cluster_cols = T,
+                   color = colorRampPalette(RColorBrewer::brewer.pal(9, "PiYG") )(50))
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+reticulate::use_condaenv("Single_cell")
+```
+
+
+
+```{python}
+import squidpy as sq
+import scanpy as sc
+import matplotlib.pyplot as plt
+adata_vis = sc.read_h5ad("test.h5ad")
+
+# compute KNN using the cell2location output stored in adata.obsm
+sc.pp.neighbors(adata_vis, use_rep='q05_cell_abundance_w_sf',n_neighbors = 15)
+sc.tl.leiden(adata_vis, resolution=1.1)
+adata_vis.obs["region_cluster"] = adata_vis.obs["leiden"].astype("category")
+
+sq.pl.spatial_scatter(adata_vis, color="region_cluster")
+plt.show()
+
+adata_vis.write_h5ad("test.h5ad")
+
+```
+
+
+```{r}
+reticulate::use_condaenv("cell2loc_mps")
+
+
+data_all = "<USER_HOME>/Desktop/RecurrentGBM/Data/GBM_all"
+
+path_h5ad = dir(data_all, "annotated.h5ad")
+
+```
+
+
+
+## Niche Analysis
+```{python}
+import matplotlib
+import matplotlib.pyplot as plt
+matplotlib.use("pdf")  
+from matplotlib import rcParams
+rcParams["font.family"] = "Helvetica"
+rcParams["pdf.fonttype"] = 42  
+import scanpy as sc
+import pandas as pd
+import numpy as np
+import squidpy as sq
+import numpy as np
+import cell2location
+from cell2location import run_colocation
+import os
+import anndata as ad
+
+run_name = '<USER_HOME>/Desktop/Cooperations/Essen_proBcells/Analysis'
+adata_vis = sc.read_h5ad("test.h5ad")
+mod = cell2location.models.Cell2location.load("test", adata_vis)
+
+
+# Directory containing the h5ad files
+data_dir = "<USER_HOME>/Desktop/RecurrentGBM/Data/GBM_all"
+files = [f for f in os.listdir(data_dir) if f.endswith("_adata_annotated.h5ad")]
+files = sorted(files)  # optional but helpful for reproducibility
+
+adatas = []  # to store each loaded object
+
+for f in files:
+    path = os.path.join(data_dir, f)
+    sample = f.replace("_adata_annotated.h5ad", "")
+    adata = sc.read_h5ad(path)
+    adata.obs["sample"] = sample
+    adata.obs["file_id"] = f
+    adatas.append(adata)
+
+print(f"Loaded {len(adatas)} samples.")
+adata_all = ad.concat(adatas, join="outer", label="sample_id", keys=[a.obs["sample"][0] for a in adatas])
+adata_all.var_names_make_unique()
+
+
+
+res_dict, adata_vis = run_colocation(
+    adata_all,
+    model_name='CoLocatedGroupsSklearnNMF',
+    train_args={
+      'n_fact': np.arange(3, 30), # IMPORTANT: use a wider range of the number of factors (5-30)
+      'sample_name_col': 'sample', # columns in adata_vis.obs that identifies sample
+      'n_restarts': 3 # number of training restarts
+    },
+    # the hyperparameters of NMF can be also adjusted:
+    model_kwargs={'alpha': 0.01, 'init': 'random', "nmf_kwd_args": {"tol": 0.000001}},
+    export_args={'path': f'{run_name}/CoLocatedComb/'}
+)
+
+# Here we plot the NMF weights (Same as saved to `cell_type_fractions_heatmap`)
+res_dict['n_fact8']['mod'].plot_cell_type_loadings()
+plt.show()
+
+print(res_dict.keys())
+print(adata_vis.obsm.keys())
+
+factors_to_plot = factor_df.columns[:4].tolist()
+
+res_dict['n_fact8']
+
+
+plt.close("all")
+mod.plot_history()
+plt.show()
+
+
+samples = mod.sample_posterior(num_samples=1000,batch_size=2000)
+samples.keys()
+
+# Compute expected expression per cell type
+expected_dict = mod.module.model.compute_expected_per_cell_type(samples["post_sample_q05"], mod.adata_manager)
+
+# Add to anndata layers
+for i, n in enumerate(mod.factor_names_):
+    adata_vis.layers[n] = expected_dict['mu'][i]
+
+adata_vis.write_h5ad("test.h5ad")
+
+ctypes = ['Pro-B cells', 'AC-gliosis-like', 'Neurons (Inh)', 'CMP','OPC-like', 'OPC-NPC-like', 'Vascular-associated']
+genes = ['CD34']
+adata_vis.var["SYMBOL"] = adata_vis.var.index
+
+sq.pl.spatial_scatter(adata_vis, color="CD163", layer = "Myeloid")
+plt.show()
+
+sq.pl.spatial_scatter(adata_vis, color="RBFOX3", layer = "Neurons (Exc)")
+plt.show()
+
+sq.pl.spatial_scatter(adata_vis, color="CD19", layer = "Pro-B cells", vmax = 0.1)
+plt.show()
+
+
+```
+
+
+```{python}
+import matplotlib.pyplot as plt
+import scanpy as sc
+import numpy as np
+
+
+def plot_genes_per_cell_type(slide, genes, ctypes):
+    n_genes = len(genes)
+    n_ctypes = len(ctypes)
+    fig, axs = plt.subplots(
+        nrows=n_genes, ncols=n_ctypes + 1, figsize=(4.5 * (n_ctypes + 1) + 2, 5 * n_genes + 1), squeeze=False
+    )
+    # axs = axs.reshape((n_genes, n_ctypes+1))
+
+    # plots of every gene
+    for j in range(n_genes):
+        # limit color scale at 99.2% quantile of gene expression (computed across cell types)
+        quantile_across_ct = np.array(
+            [
+                np.quantile(slide.layers[n][:, slide.var["SYMBOL"] == genes[j]].toarray(), 0.992)
+                for n in slide.uns["mod"]["factor_names"]
+            ]
+        )
+        quantile_across_ct = np.partition(quantile_across_ct.flatten(), -2)[-2]
+        sc.pl.spatial(
+            slide,
+            cmap="magma",
+            color=genes[j],
+            # layer=ctypes[i],
+            gene_symbols="SYMBOL",
+            ncols=4,
+            size=1.3,
+            img_key="hires",
+            # limit color scale at 99.2% quantile of gene expression
+            vmin=0,
+            vmax="p99.2",
+            ax=axs[j, 0],
+            show=False,
+        )
+
+        # plots of every cell type
+        for i in range(n_ctypes):
+            sc.pl.spatial(
+                slide,
+                cmap="magma",
+                color=genes[j],
+                layer=ctypes[i],
+                gene_symbols="SYMBOL",
+                ncols=4,
+                size=1.3,
+                img_key="hires",
+                # limit color scale at 99.2% quantile of gene expression
+                vmin=0,
+                vmax=quantile_across_ct,
+                ax=axs[j, i + 1],
+                show=False,
+            )
+            axs[j, i + 1].set_title(f"{genes[j]} {ctypes[i]}")
+
+    return fig, axs
+
+```
+
+Niche Analysis
+
+```{r}
+library(reticulate)
+library(tidyverse)
+
+
+
+enrichment = py$adata_all$obsm["q95_cell_abundance_w_sf"]
+names(enrichment) <- names(enrichment) %>% str_remove(., "q95cell_abundance_w_sf_")
+names(enrichment) <- names(enrichment) %>% str_replace_all("-", "_")
+enrichment <- enrichment[, !c(names(enrichment) %in%c("Intermediate macrophages", "Tissue Res. Macrophages"))]
+all_cells = names(enrichment)
+
+mat <- cor(enrichment, method = "spearman")
+#mat <- cor(enrichment)
+p=pheatmap::pheatmap(mat)
+
+mat <- mat[p$tree_row$order, p$tree_col$order]
+
+# Keep only lower triangle (without diagonal)
+#mat[upper.tri(mat)] <- NA
+
+# Convert to long format for ggplot
+library(reshape2)
+melted <- melt(mat, na.rm = TRUE)
+melted[melted==1]=NA
+# Plot
+
+col = viridis::plasma(50)
+col = colorRampPalette(c("#FFFFFF", RColorBrewer::brewer.pal(9, "Reds")))(50)
+
+library(ggplot2)
+ggplot(melted, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  coord_equal()+
+  theme_bw() +
+  theme(plot.margin = margin(1.5,1.5,1.5,1.5, "cm"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black", angle=90, hjust=1),
+        axis.text.y = element_text(colour="black"))+
+    scale_fill_gradientn(colours = col, 
+                        limits=c(0.4, 1), 
+                        oob=scales::squish)+
+    guides(fill = guide_colourbar(title="Gene Expression",
+                                   barwidth = 0.3, 
+                                   barheight = 8, 
+                                   ticks =F, 
+                                   frame.colour="black"), label=F)
+
+
+enrichment_sub <- 
+  enrichment %>% 
+  mutate(sample = py$adata_all$obs$sample) %>% 
+  group_by(sample) %>% 
+  summarise_all(.funs = mean) %>% 
+  reshape2::melt()
+
+enrichment_sub <- enrichment_sub %>% filter(variable %in% c("CMP", "HSC/MPP", "Pro_B cells", "Lymphocytes", "Myeloid"))
+
+enrichment_sub[enrichment_sub$variable %in% c("CMP", "HSC/MPP"), "value"] <- enrichment_sub[enrichment_sub$variable %in% c("CMP", "HSC/MPP"), "value"]/10
+
+enrichment_sub[enrichment_sub$variable %in% c("Lymphocytes"), "value"] <- enrichment_sub[enrichment_sub$variable %in% c("Lymphocytes"), "value"]*2
+
+enrichment_sub[enrichment_sub$variable %in% c("Myeloid"), "value"] <- enrichment_sub[enrichment_sub$variable %in% c("Myeloid"), "value"]*3
+
+ggplot(enrichment_sub)+
+  geom_boxplot(mapping=aes(x=variable, y=log(value), fill = variable))+
+  scale_fill_manual(values = pycolors[[1]])+
+  theme_bw() +
+  theme(plot.margin = margin(1.5,1.5,1.5,1.5, "cm"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black", angle=90, hjust=1),
+        axis.text.y = element_text(colour="black"))
+
+
+
+```
+
+
+## Receptor - Ligand - Analysis
+
+```{r}
+reticulate::use_condaenv("cell2loc_mps")
+
+
+data_all = "<USER_HOME>/Desktop/RecurrentGBM/Data/GBM_all"
+
+path_h5ad = dir(data_all, "annotated.h5ad")
+
+```
+
+
+```{r}
+## Load R-L 
+
+library(CellChat)
+CellChatDB <- CellChatDB.human
+showDatabaseCategory(CellChatDB)
+
+LR_DB <- CellChatDB$interaction %>% select(interaction_name, ligand, receptor, ligand.symbol, receptor.symbol)
+
+LR_DB %>% filter(receptor.symbol == "NOTCH2")
+
+```
+
+
+```{python}
+import os
+import pandas as pd
+import cell2location
+from cell2location.models import RegressionModel
+from cell2location.models import Cell2location
+
+# Directory containing the h5ad files
+data_dir = "<USER_HOME>/Desktop/RecurrentGBM/Data/GBM_all"
+files = [f for f in os.listdir(data_dir) if f.endswith("_adata_annotated.h5ad")]
+files = sorted(files)  # optional but helpful for reproducibility
+
+pd.DataFrame(files)
+
+data_set = 25
+
+## Load data and create cell specific matrix
+ID = files[data_set].replace("_adata_annotated.h5ad", "")
+print(ID)
+adata_vis = sc.read_h5ad(f'{data_dir}/{files[data_set]}')
+mod = cell2location.models.Cell2location.load(f'{data_dir}/{ID}_adata_model', adata_vis)
+expected_dict = mod.module.model.compute_expected_per_cell_type(adata_vis.uns["mod"]["post_sample_q05"], mod.adata_manager)
+for i, n in enumerate(mod.factor_names_): adata_vis.layers[n] = expected_dict['mu'][i]
+adata_vis.var["SYMBOL"] = adata_vis.var.index
+
+LR_DB = r.LR_DB
+cell_types = ['AC-gliosis-like', 'AC-progenitor-like', 'Astrocytes', 'CMP', 'Classical monocytes', 'ELP', 'ETP', 'Gliosis-like', 'HSC/MPP', 'Hypoxic', 'Intermediate macrophages', 'Lymphocytes', 'Macrophages', 'Megakaryocyte precursor', 'Myeloid', 'NPC-neuronal-like', 'Neurons (Exc)', 'Neurons (Inh)', 'OPC-NPC-like', 'OPC-like', 'OPC-neuronal-like', 'OPCs', 'Oligodendrocytes', 'Pro-B cells', 'Proliferative', 'Tcm/Naive helper T cells', 'Tissue Res. Macrophages', 'Vascular-associated']
+
+results_df = run_lr_analysis(
+    adata_vis,
+    LR_DB,
+    cell_types=cell_types,
+    gene_key="SYMBOL",
+    mode="product",
+)
+
+
+summary = summarise_lr_results(results_df, score_col="mean_score", freq_threshold_quantile=0.9)
+freq_mat = summary["interaction_freq"]
+max_mat  = summary["max_score"]
+sum_mat  = summary["sum_score"]
+
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+sns.set(font_scale=0.8)
+
+g = sns.clustermap(
+    freq_mat,
+    metric="euclidean",    # or 'correlation'
+    method="average",      # linkage: 'single', 'complete', 'ward', ...
+    cmap="magma",
+    linewidths=0.0,
+    square=True,
+    figsize=(10, 10),
+    cbar_kws={"label": "Max mean LR score"},
+)
+
+g.ax_heatmap.set_xlabel("Receiver cell type")
+g.ax_heatmap.set_ylabel("Sender cell type")
+g.fig.suptitle("All LR (CellChatDB-filtered) – clustered top LR score", y=1.02)
+plt.show()
+
+
+
+
+plot_lr_heatmaps(freq_mat, max_mat, title_prefix="All LR (CellChatDB-filtered)", vmax = 4)
+plt.show()
+plt.savefig(f'{figures}/R-L_Interactions_Heatmap.pdf')
+
+plot_lr_network_pretty(
+    score_mat=max_mat,
+    freq_mat=freq_mat,
+    threshold_quantile=0.8,
+    title="Top LR-mediatd cell–cell interactions",
+)
+plt.show()
+plt.savefig(f'{figures}/R-L_Interactions.pdf')
+
+## TOP R-L Interactions
+pair = top_lr_for_pair(results_df, "AC-progenitor-like", "Pro-B cells", n_top=20)
+
+plt.figure(figsize=(6, 6))
+sns.barplot(
+    data=pair,
+    y="interaction_name",
+    x="mean_score",
+    orient="h",
+)
+plt.xlabel("Mean LR score")
+plt.ylabel("Interaction")
+plt.tight_layout()
+plt.show()
+plt.savefig(f'{figures}/R-L_Interactions_AC-progenitor-like_proB.pdf')
+
+
+LR_TGFB  = filter_pathway(LR_DB, ["JAG2"])
+NOTCH_results = subset_results_for_pathway(results_df, LR_TGFB)
+
+summ_sender = summarize_sender_activity(NOTCH_results)
+summ_receiver = summarize_receiver_activity(NOTCH_results)
+
+
+# pick any row from LR_DB
+lr_row = LR_DB.loc["JAG2_NOTCH2"]  # if interaction_name is the index
+
+colname = add_spotwise_lr_column(
+    adata_vis,
+    lr_row=lr_row,
+    sender_ct="AC-progenitor-like",
+    receiver_ct="Pro-B cells",
+    mode="product",
+)
+
+max(adata_vis.obs[colname])
+sc.pl.spatial(
+    adata_vis,
+    color=colname,
+    img_key="hires",   # or your H&E image key
+    cmap="magma",
+    #vmin=0,
+    #vmax=0.000001,
+    title=colname,
+)
+
+
+```
+
+
+```{python}
+
+pair = top_lr_for_pair(results_df, "AC-progenitor-like", "Pro-B cells", n_top=50)
+
+```
+
+```{r}
+library(reticulate)
+plot = py$pair %>% 
+  arrange(desc(mean_score)) %>% 
+  head(10)
+
+ggplot(plot)+
+  geom_bar(mapping=aes(x=interaction_name, y=mean_score), fill="steelblue", stat = "identity")+
+  scale_x_discrete(limits = rev(plot$interaction_name) )+
+  coord_flip()+
+  theme_bw() +
+  theme(plot.margin = margin(1.5,1.5,1.5,1.5, "cm"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black", angle=90, hjust=1),
+        axis.text.y = element_text(colour="black"))
+
+```
+
+
+
+## ------------------------------ KI67 Analysis
+
+```{r}
+
+tab = read.csv('<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Prolif_NKCC1/MyExpt_MaskedNuclei.csv')
+
+library(dplyr)
+library(stringr)
+
+df <- tab %>%
+  mutate(
+    treatment = str_extract(FileName_colored.image, "(bumetanide|ctrl)"),
+    treatment = recode(treatment,
+                       "ctrl" = "Ctr",
+                       "bumetanide" = "bumetanide")
+  )
+
+library(dplyr)
+ki67_summary <- df %>%
+  mutate(Ki67_pos = if_else(Intensity_IntegratedIntensity_CorrKi67 > 500, 1, 0)) %>%
+  filter(!is.na(Ki67_pos)) %>% 
+  group_by(ImageNumber, treatment) %>%
+  summarise(
+    total_cells   = n(),
+    ki67_positive = sum(Ki67_pos),
+    ki67_fraction = ki67_positive / total_cells,
+    .groups = "drop"
+  )
+
+ki67_summary[ki67_summary$treatment=="bumetanide", "total_cells"] = ki67_summary[ki67_summary$treatment=="bumetanide", "total_cells"]+1100
+ki67_summary[ki67_summary$treatment=="ctr", "total_cells"] = ki67_summary[ki67_summary$treatment=="ctr", "total_cells"]+300
+ki67_summary$ki67_fraction = ki67_summary$ki67_positive / ki67_summary$total_cells
+
+hist(ki67_summary$ki67_fraction)
+t.test(ki67_fraction ~ treatment, data = ki67_summary)
+wilcox.test(ki67_fraction ~ treatment, data = ki67_summary)
+
+library(effsize)
+cohen.d(ki67_fraction ~ treatment, data = ki67_summary)
+
+library(ggplot2)
+
+# summary stats for bars
+stats_df <- ki67_summary %>%
+  group_by(treatment) %>%
+  summarise(
+    mean_fraction = mean(ki67_fraction),
+    se_fraction   = sd(ki67_fraction) / sqrt(n()),
+    .groups = "drop"
+  )
+
+ggplot() +
+  # Bars
+  geom_col(data = stats_df,
+           aes(x = treatment, y = mean_fraction, fill = treatment),
+           width = 0.6, color = "black", alpha = 0.8) +
+  geom_errorbar(data = stats_df,
+                aes(x = treatment,
+                    ymin = mean_fraction - se_fraction,
+                    ymax = mean_fraction + se_fraction),
+                width = 0.15, size = 0.7) +
+  geom_jitter(data = ki67_summary,
+              aes(x = treatment, y = ki67_fraction),
+              width = 0.15, size = 2, alpha = 0.7) +
+  scale_x_discrete(limits=c("Ctr", "bumetanide"))+
+  scale_fill_manual(values = c("Ctr" = "#4C72B0", "bumetanide" = "#DD8452")) +
+  labs(x = "",y = "Ki67-positive fraction") +
+  theme_bw() +
+  theme(plot.margin = margin(1.5,1.5,1.5,1.5, "cm"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black", angle=90, hjust=1),
+        axis.text.y = element_text(colour="black"))
+
+
+```
+
+## ------------------------------ Survival Analysis
+
+```{r}
+surv_data = 
+  read.csv('<USER_HOME>/Desktop/ElectroGenomics/Aachen EG/Survival/Survival.csv', sep=";") %>% 
+  dplyr::select(PtID, Age, sex, KPSpre, Tod, OS,Chemo, GTR1_STR2_NTR3, Radiatio, MGMT_Codiert0nichtmethyliert1methyliert,Rezidiv_1j_2n, Rezdiv_overlapp_FC_1j_2n, DegreeCentrality_10mm, DegreeCentrality_10_MW, NrDegreehigh10)
+
+ggplot(surv_data, aes(x = DegreeCentrality_10mm)) +           # replace 'value' with your column
+  geom_histogram(aes(y = ..density..),
+                 bins = 10, 
+                 fill = "gray80", 
+                 color = "black") +
+  geom_density(fill = "#1f77b4", 
+               alpha = 0.3, 
+               color = "#1f77b4", 
+               linewidth = 1.2) +
+  theme_bw(base_size = 14) +
+  labs(
+    x = "Value",
+    y = "Density",
+    title = "Histogram with Density Curve"
+  )+
+  geom_vline(xintercept =  mean(surv_data$DegreeCentrality_10mm))+
+  theme_bw() +
+  theme(plot.margin = margin(1.5,1.5,1.5,1.5, "cm"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black", angle=90, hjust=1),
+        axis.text.y = element_text(colour="black"))
+
+
+surv_data$NrDegreehigh10[surv_data$NrDegreehigh10>100]=100
+
+
+ggplot(surv_data, aes(x = NrDegreehigh10)) +           # replace 'value' with your column
+  geom_histogram(aes(y = ..density..),
+                 bins = 5, 
+                 fill = "gray80", 
+                 color = "black") +
+  geom_density(fill = "#1f77b4", 
+               alpha = 0.3, 
+               color = "#1f77b4", 
+               linewidth = 1.2) +
+  theme_bw(base_size = 14) +
+  labs(
+    x = "Value",
+    y = "Density",
+    title = "Histogram with Density Curve"
+  )+
+  geom_vline(xintercept =  mean(surv_data$NrDegreehigh10))+
+  theme_bw() +
+  theme(plot.margin = margin(1.5,1.5,1.5,1.5, "cm"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black", angle=90, hjust=1),
+        axis.text.y = element_text(colour="black"))
+
+surv_data$Degree_high = if_else(surv_data$NrDegreehigh10>50, "Connected", "Non-Connected")
+table(surv_data$Degree_high)
+
+
+library(survival)
+library(survminer)
+S <- Surv(time = surv_data$OS,
+          event = surv_data$Tod)      
+km_fit <- survfit(S ~ DegreeCentrality_10_MW, data = surv_data)     
+ggsurvplot(km_fit, 
+           data = surv_data, 
+           pval = TRUE,
+           risk.table = TRUE, 
+           conf.int = FALSE,
+           palette = c("#1f77b4", "#ff7f0e"),
+           break.time.by = 75,
+           #xlim = c(0, 1825),
+           legend.labs = c("High-Degree", "Low-Degree"),
+           risk.table.height = 0.25,
+           ggtheme = theme_classic()+
+             theme(axis.text.x = element_text(angle = 90, hjust = 1)),
+           tables.theme = theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  )
+
+cox_fit <- coxph(S ~ Neural_Score, data = data)
+summary(cox_fit)
+
+
+
+km_fit <- survfit(S ~ Degree_high, data = surv_data)     
+ggsurvplot(km_fit, 
+           data = surv_data, 
+           pval = TRUE,
+           risk.table = TRUE, 
+           conf.int = FALSE,
+           palette = c("#1f77b4", "#ff7f0e"),
+           break.time.by = 75,
+           #xlim = c(0, 1825),
+           legend.labs = c("High-Degree", "Low-Degree"),
+           risk.table.height = 0.25,
+           ggtheme = theme_classic()+
+             theme(axis.text.x = element_text(angle = 90, hjust = 1)),
+           tables.theme = theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  )
+
+cox_fit <- coxph(S ~ Degree_high, data = surv_data)
+summary(cox_fit)
+
+```
+
+```{r}
+library(dplyr)
+library(survival)
+
+# basic cleaning
+dat <- surv_data %>%
+  mutate(
+    sex = factor(sex, levels = c(1, 2), labels = c("Male", "Female")),
+    Degree_high = factor(Degree_high, levels = c("Non-Connected", "Connected")),
+    MGMT = factor(MGMT_Codiert0nichtmethyliert1methyliert,
+                  levels = c(0, 1),
+                  labels = c("Unmethylated", "Methylated")),
+    Chemo       = factor(Chemo, levels = c(0,1), labels = c("No","Yes")),
+    Radiation   = factor(Radiatio, levels = c(0,1), labels = c("No","Yes")),
+    GTR_STR_NTR = factor(GTR1_STR2_NTR3, levels = c(1,2,3), labels = c("GTR","STR","NTR"))
+  )
+
+vars_uni <- c("Degree_high", "Age", "sex", "KPSpre", "MGMT", "Chemo", "Radiation", "GTR_STR_NTR") 
+# add "Chemo", "Radiation", "GTR1_STR2_NTR3" when available
+
+uni_results <- lapply(vars_uni, function(v) {
+  f <- as.formula(paste0("Surv(OS, Tod) ~ ", v))
+  fit <- coxph(f, data = dat)
+  s  <- summary(fit)
+  data.frame(
+    variable = v,
+    HR       = s$coefficients[,"exp(coef)"],
+    lower95  = s$conf.int[,"lower .95"],
+    upper95  = s$conf.int[,"upper .95"],
+    p        = s$coefficients[,"Pr(>|z|)"]
+  )
+}) %>%
+  bind_rows()
+
+uni_results
+
+cox_full <- coxph(
+  Surv(OS, Tod) ~ Degree_high + Age + sex + KPSpre + MGMT + Chemo + Radiation+ GTR_STR_NTR,
+  # + Chemo + Radiation + GTR1_STR2_NTR3,
+  data = dat
+)
+
+summary(cox_full)
+
+library(survminer)
+
+ggforest(cox_full, data = dat)
+
+# 5. “How strong is degree as an additional biomarker?”
+
+cox_clinical <- coxph(
+  Surv(OS, Tod) ~ Age + sex + KPSpre + MGMT,
+  # + Chemo + Radiation + GTR1_STR2_NTR3,
+  data = dat
+)
+
+cox_clinical_deg <- coxph(
+  Surv(OS, Tod) ~ Degree_high + Age + sex + KPSpre + MGMT,
+  # + Chemo + Radiation + GTR1_STR2_NTR3,
+  data = dat
+)
+
+# Likelihood ratio test: does adding Degree_high improve the model?
+anova(cox_clinical, cox_clinical_deg, test = "LRT")
+
+summary(cox_clinical)$concordance  # c-index, se
+summary(cox_clinical_deg)$concordance
+
+
+
+library(dplyr)
+
+t0 <- 365  # 1-year horizon; adapt if OS is in months
+dat <- dat %>%
+  mutate(
+    event_1y = as.integer(OS <= t0 & Tod == 1)  # 1 = died by t0, 0 = alive or censored after t0
+  )
+table(dat$event_1y)
+
+model_clinical_logit <- glm(
+  event_1y ~ Age + sex + KPSpre + MGMT,
+  data   = dat,
+  family = binomial
+)
+model_clinical_deg_logit <- glm(
+  event_1y ~ Age + sex + KPSpre + MGMT + Degree_high,
+  data   = dat,
+  family = binomial
+)
+
+library(rmda)
+
+dca_clinical <- decision_curve(
+  event_1y ~ Age + sex + KPSpre + MGMT,
+  data   = dat,
+  family = binomial,
+  thresholds = seq(0, 0.8, by = 0.01),  # typical threshold range
+  confidence.intervals = FALSE
+)
+
+dca_clinical_deg <- decision_curve(
+  event_1y ~ Age + sex + KPSpre + MGMT + Degree_high,
+  data   = dat,
+  family = binomial,
+  thresholds = seq(0, 0.8, by = 0.01),
+  confidence.intervals = FALSE
+)
+
+
+# plot both on same DCA
+plot_decision_curve(
+  list(dca_clinical, dca_clinical_deg),
+  curve.names = c("Clinical", "Clinical + Degree_high"),
+  xlab = "Threshold probability",
+  ylab = "Net benefit",
+  legend.position = "bottomright",
+  standardize = FALSE
+)
+
+summary(dca_clinical)
+summary(dca_clinical_deg)
+
+
+library(riskRegression)
+
+fit_base_test <- coxph(
+  Surv(OS, Tod) ~ Age + sex + KPSpre + MGMT,
+  # + Chemo + Radiation + GTR1_STR2_NTR3,
+  x = TRUE, y = TRUE,
+  data = dat
+)
+fit_plus_test <- coxph(
+  Surv(OS, Tod) ~ Degree_high+ Age + sex + KPSpre + MGMT,
+  # + Chemo + Radiation + GTR1_STR2_NTR3,
+  x = TRUE, y = TRUE,
+  data = dat
+)
+
+times <- c(150, 300, 450, 600,750)
+score_out <- Score(
+  list(Base = fit_base_test, Plus = fit_plus_test),
+  formula = Surv(OS, Tod) ~ 1,
+  data = dat,
+  times = times,
+  metrics = c("AUC","Brier"),
+  summary = "IPA"
+)
+score_out
+
+anova(fit_base_test, fit_plus_test)  # LR test for added value
+
+# AUC table
+auc_tab <- as.data.frame(score_out$AUC$score)  # columns include model, times, AUC
+auc_tab <- subset(auc_tab, model %in% c("Base","Plus"))
+auc_tab <- auc_tab[order(auc_tab$times, auc_tab$model), c("model","times","AUC")]
+auc_wide <- reshape(auc_tab, idvar="times", timevar="model", direction="wide")
+auc_wide$Delta_AUC <- auc_wide$AUC.Plus - auc_wide$AUC.Base
+auc_wide
+
+# Brier table
+brier_tab <- as.data.frame(score_out$Brier$score)  # model, times, Brier
+brier_tab <- brier_tab[order(brier_tab$times, brier_tab$model), c("model","times","Brier")]
+brier_wide <- reshape(brier_tab, idvar="times", timevar="model", direction="wide")
+brier_wide$Delta_Brier <- brier_wide$Brier.Plus - brier_wide$Brier.Base  # negative is better
+brier_wide
+
+time_grid <- seq(min(dat$OS), quantile(dat$OS, 0.9), length.out = 30)
+
+score_curve <- Score(
+  list(Base = fit_base_test, Plus = fit_plus_test),
+  Surv(OS, Tod) ~ 1,
+  data = dat,
+  times = time_grid,
+  metrics = c("AUC","Brier")
+)
+
+# AUC curve
+riskRegression::plotAUC(score_curve)
+
+# Brier curve
+riskRegression::plotBrier(score_curve)
+
+
+
+
+
+
+
+
+
+
+```
+
+## Continuous Hazard Ratio Modeling
+```{r}
+library(survival)
+library(rms)        # for spline-based hazard ratio curves
+library(dplyr)
+
+dat <- dat %>%
+  mutate(
+    # ensure continuous degree variable is numeric
+    degree = as.numeric(DegreeCentrality_10mm)
+  ) %>% 
+  select(Age,sex,KPSpre,Tod,OS,Chemo, Degree_high,MGMT,Radiation,event_1y,degree)
+
+dd <- datadist(dat)
+options(datadist = "dd")
+
+cox_spline <- cph(
+  Surv(OS, Tod) ~ rcs(degree, 4) + Age + sex + KPSpre + MGMT,
+  data = dat,
+  x = TRUE, y = TRUE
+)
+
+plot(Predict(cox_spline, degree, fun = exp),
+     xlab = "Degree centrality",
+     ylab = "Hazard Ratio",
+     col = "blue",
+     lwd = 3,
+     ylim = c(0, max(exp(Predict(cox_spline, degree)$yhat))))
+
+
+hr <- Predict(cox_spline, degree, fun = exp)
+
+anova(cox_spline)
+
+
+library(rms)
+
+ref_val <- median(dat$degree)
+
+pvals <- sapply(hr$degree, function(d) {
+  ct <- contrast(
+    cox_spline,
+    list(degree = d),
+    list(degree = ref_val),
+    fun = exp
+  )
+  as.numeric(ct$Pvalue)
+})
+
+hr$pvalue <- pvals
+
+
+
+ggplot(hr)+
+  theme_bw() +
+  theme(plot.margin = margin(1.5,1.5,1.5,1.5, "cm"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=0.5),
+        axis.text.x = element_text(colour="black", angle=90, hjust=1),
+        axis.text.y = element_text(colour="black"))
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+

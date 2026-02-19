@@ -20,9 +20,9 @@ Spatially Restricted Immature Neuronal Programs Drive Functional Connectivity in
 
 1. `scripts/Preprocessing.Rmd`
 2. `scripts/Analysis_Part1.Rmd`
-3. `scripts/Analysis_Microglia.Rmd`
-4. `scripts/Analysis_Figure1.Rmd`
-5. `scripts/Analysis_Figure2.Rmd`
+3. `scripts/Analysis_Part2.Rmd`
+4. `scripts/Analysis_Part3.Rmd`
+5. `scripts/Analysis_Part4.Rmd`
 
 ## Quickstart (reproducible rendering)
 
@@ -32,9 +32,9 @@ From R (R >= 4.2 recommended):
 # install.packages("rmarkdown")
 rmarkdown::render("scripts/Preprocessing.Rmd")
 rmarkdown::render("scripts/Analysis_Part1.Rmd")
-rmarkdown::render("scripts/Analysis_Microglia.Rmd")
-rmarkdown::render("scripts/Analysis_Figure1.Rmd")
-rmarkdown::render("scripts/Analysis_Figure2.Rmd")
+rmarkdown::render("scripts/Analysis_Part2.Rmd")
+rmarkdown::render("scripts/Analysis_Part3.Rmd")
+rmarkdown::render("scripts/Analysis_Part4.Rmd")
 ```
 
 > Tip: for clean, portable paths, prefer relative paths and/or `here::here()` in all scripts.
